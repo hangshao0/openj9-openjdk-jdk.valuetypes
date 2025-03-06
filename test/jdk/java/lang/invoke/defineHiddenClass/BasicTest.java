@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -23,8 +23,8 @@
 
 /*
  * @test
- * @modules java.base/jdk.internal.org.objectweb.asm
- *          jdk.compiler
+ * @bug 8330467
+ * @modules jdk.compiler
  * @library /test/lib
  * @compile BadClassFile.jcod
  *          BadClassFile2.jcod
@@ -36,11 +36,9 @@
 
 import java.io.File;
 import java.io.IOException;
+import java.lang.classfile.ClassFile;
+import java.lang.constant.ClassDesc;
 import java.lang.invoke.MethodHandles.Lookup;
-
-import static java.lang.invoke.MethodHandles.lookup;
-import static java.lang.invoke.MethodHandles.Lookup.ClassOption.*;
-
 import java.lang.reflect.Array;
 import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
@@ -51,8 +49,6 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.stream.Stream;
 
-import jdk.internal.org.objectweb.asm.ClassWriter;
-import jdk.internal.org.objectweb.asm.Type;
 import jdk.test.lib.compiler.CompilerUtils;
 import jdk.test.lib.Utils;
 
@@ -60,7 +56,11 @@ import org.testng.annotations.BeforeTest;
 import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 
-import static jdk.internal.org.objectweb.asm.Opcodes.*;
+import static java.lang.classfile.ClassFile.*;
+import static java.lang.constant.ConstantDescs.CD_Enum;
+import static java.lang.constant.ConstantDescs.CD_Object;
+import static java.lang.invoke.MethodHandles.lookup;
+import static java.lang.invoke.MethodHandles.Lookup.ClassOption.*;
 import static org.testng.Assert.*;
 
 interface HiddenTest {
@@ -179,6 +179,20 @@ public class BasicTest {
         }
     }
 
+    // Define a hidden class that uses lambda and contains its implementation
+    // This verifies LambdaMetaFactory supports the caller which is a hidden class
+    @Test
+    public void testHiddenLambda() throws Throwable {
+        HiddenTest t = (HiddenTest)defineHiddenClass("HiddenLambda").newInstance();
+        try {
+            t.test();
+        } catch (Error e) {
+            if (!e.getMessage().equals("thrown by " + t.getClass().getName())) {
+                throw e;
+            }
+        }
+    }
+
     // Verify the nest host and nest members of a hidden class and hidden nestmate class
     @Test
     public void testHiddenNestHost() throws Throwable {
@@ -246,9 +260,9 @@ public class BasicTest {
     @DataProvider(name = "emptyClasses")
     private Object[][] emptyClasses() {
         return new Object[][] {
-                new Object[] { "EmptyHiddenSynthetic", ACC_SYNTHETIC },
-                new Object[] { "EmptyHiddenEnum", ACC_ENUM },
-                new Object[] { "EmptyHiddenAbstractClass", ACC_ABSTRACT },
+                new Object[] { "EmptyHiddenSynthetic", ACC_SYNTHETIC | ACC_IDENTITY },
+                new Object[] { "EmptyHiddenEnum", ACC_ENUM | ACC_IDENTITY },
+                new Object[] { "EmptyHiddenAbstractClass", ACC_ABSTRACT | ACC_IDENTITY },
                 new Object[] { "EmptyHiddenInterface", ACC_ABSTRACT|ACC_INTERFACE },
                 new Object[] { "EmptyHiddenAnnotation", ACC_ANNOTATION|ACC_ABSTRACT|ACC_INTERFACE },
         };
@@ -264,23 +278,23 @@ public class BasicTest {
      */
     @Test(dataProvider = "emptyClasses")
     public void emptyHiddenClass(String name, int accessFlags) throws Exception {
-        byte[] bytes = (accessFlags == ACC_ENUM) ? classBytes(name, Enum.class, accessFlags)
-                                                 : classBytes(name, accessFlags);
+        byte[] bytes = (accessFlags == (ACC_ENUM | ACC_IDENTITY)) ? classBytes(name, CD_Enum, accessFlags)
+                : classBytes(name, accessFlags);
         Class<?> hc = lookup().defineHiddenClass(bytes, false).lookupClass();
         switch (accessFlags) {
-            case ACC_SYNTHETIC:
+            case (ACC_SYNTHETIC | ACC_IDENTITY):
                 assertTrue(hc.isSynthetic());
                 assertFalse(hc.isEnum());
                 assertFalse(hc.isAnnotation());
                 assertFalse(hc.isInterface());
                 break;
-            case ACC_ENUM:
+            case (ACC_ENUM | ACC_IDENTITY):
                 assertFalse(hc.isSynthetic());
                 assertTrue(hc.isEnum());
                 assertFalse(hc.isAnnotation());
                 assertFalse(hc.isInterface());
                 break;
-            case ACC_ABSTRACT:
+            case ACC_ABSTRACT | ACC_IDENTITY:
                 assertFalse(hc.isSynthetic());
                 assertFalse(hc.isEnum());
                 assertFalse(hc.isAnnotation());
@@ -302,7 +316,7 @@ public class BasicTest {
                 throw new IllegalArgumentException("unexpected access flag: " + accessFlags);
         }
         assertTrue(hc.isHidden());
-        assertTrue(hc.getModifiers() == (ACC_PUBLIC|accessFlags));
+        assertEquals(hc.getModifiers(), (ACC_PUBLIC|accessFlags));
         assertFalse(hc.isLocalClass());
         assertFalse(hc.isMemberClass());
         assertFalse(hc.isAnonymousClass());
@@ -347,8 +361,8 @@ public class BasicTest {
 
         Class<?> c = t.getClass();
         Class<?>[] intfs = c.getInterfaces();
-        assertTrue(intfs.length == 1 || intfs.length == 2);
-        assertTrue(intfs[0] == HiddenTest.class || (intfs.length == 2 && intfs[1] == HiddenTest.class));
+        assertTrue(intfs.length == 1);
+        assertTrue(intfs[0] == HiddenTest.class);
 
         try {
             // this would cause loading of class HiddenCantReflect and NCDFE due
@@ -514,14 +528,13 @@ public class BasicTest {
     }
 
     private static byte[] classBytes(String classname, int accessFlags) {
-        return classBytes(classname, Object.class, accessFlags);
+        return classBytes(classname, CD_Object, accessFlags);
     }
 
-    private static byte[] classBytes(String classname, Class<?> supertType, int accessFlags) {
-        ClassWriter cw = new ClassWriter(ClassWriter.COMPUTE_MAXS + ClassWriter.COMPUTE_FRAMES);
-        cw.visit(V14, ACC_PUBLIC|accessFlags, classname, null, Type.getInternalName(supertType), null);
-        cw.visitEnd();
-
-        return cw.toByteArray();
+    private static byte[] classBytes(String classname, ClassDesc superType, int accessFlags) {
+        return ClassFile.of().build(ClassDesc.ofInternalName(classname), clb -> clb
+                .withVersion(JAVA_14_VERSION, 0)
+                .withFlags(accessFlags | ACC_PUBLIC)
+                .withSuperclass(superType));
     }
 }

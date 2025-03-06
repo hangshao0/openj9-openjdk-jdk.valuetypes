@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1998, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -23,12 +23,19 @@
  * questions.
  */
 
+/*
+ * ===========================================================================
+ * (c) Copyright IBM Corp. 2023, 2024 All Rights Reserved
+ * ===========================================================================
+ */
+
 #include "util.h"
 #include "outStream.h"
 #include "eventHandler.h"
 #include "threadControl.h"
 #include "invoker.h"
 #include "signature.h"
+#include "j9cfg.h"
 
 
 #define COMMAND_LOOP_THREAD_NAME "JDWP Event Helper Thread"
@@ -40,6 +47,9 @@
 #define COMMAND_REPORT_INVOKE_DONE              2
 #define COMMAND_REPORT_VM_INIT                  3
 #define COMMAND_SUSPEND_THREAD                  4
+#if defined(J9VM_OPT_CRIU_SUPPORT)
+#define COMMAND_REPORT_VM_RESTORE               5
+#endif /* defined(J9VM_OPT_CRIU_SUPPORT) */
 
 /*
  * Event helper thread command singleKinds
@@ -435,6 +445,11 @@ handleEventCommandSingle(JNIEnv *env, PacketOutputStream *out,
         case EI_THREAD_END:
             writeThreadEvent(env, out, evinfo);
             break;
+        case EI_VIRTUAL_THREAD_START:
+        case EI_VIRTUAL_THREAD_END:
+            /* These events should already have been converted to THREAD_START and THREAD_END. */
+            EXIT_ERROR(AGENT_ERROR_INVALID_EVENT_TYPE,"should be THREAD_START or THREAD_END");
+            break;
         case EI_CLASS_LOAD:
         case EI_CLASS_PREPARE:
             writeClassEvent(env, out, evinfo);
@@ -561,6 +576,10 @@ handleReportEventCompositeCommand(JNIEnv *env,
 
     outStream_sendCommand(&out);
     outStream_destroy(&out);
+
+    // TODO - vthread node cleanup: if we didn't do any suspending, we should allow the vthread
+    // ThreadNode to be released at this point. The thread in question can be extracted the way
+    // it is done in the first loop above.
 }
 
 static void
@@ -571,7 +590,7 @@ handleReportInvokeDoneCommand(JNIEnv* env, ReportInvokeDoneCommand *command)
 }
 
 static void
-handleReportVMInitCommand(JNIEnv* env, ReportVMInitCommand *command)
+handleReportVMInitCommand(JNIEnv* env, ReportVMInitCommand *command, jbyte jdwpEvent)
 {
     PacketOutputStream out;
 
@@ -586,7 +605,7 @@ handleReportVMInitCommand(JNIEnv* env, ReportVMInitCommand *command)
                           JDWP_COMMAND(Event, Composite));
     (void)outStream_writeByte(&out, command->suspendPolicy);
     (void)outStream_writeInt(&out, 1);   /* Always one component */
-    (void)outStream_writeByte(&out, JDWP_EVENT(VM_INIT));
+    (void)outStream_writeByte(&out, jdwpEvent);
     (void)outStream_writeInt(&out, 0);    /* Not in response to an event req. */
 
     (void)outStream_writeObjectRef(env, &out, command->thread);
@@ -594,6 +613,11 @@ handleReportVMInitCommand(JNIEnv* env, ReportVMInitCommand *command)
     outStream_sendCommand(&out);
     outStream_destroy(&out);
     /* Why aren't we tossing this: tossGlobalRef(env, &(command->thread)); */
+#if defined(J9VM_OPT_CRIU_SUPPORT)
+    if (JDWP_EVENT(VM_RESTORE) == jdwpEvent) {
+        tossGlobalRef(env, &command->thread);
+    }
+#endif /* defined(J9VM_OPT_CRIU_SUPPORT) */
 }
 
 static void
@@ -619,11 +643,16 @@ handleCommand(JNIEnv *env, HelperCommand *command)
             handleReportInvokeDoneCommand(env, &command->u.reportInvokeDone);
             break;
         case COMMAND_REPORT_VM_INIT:
-            handleReportVMInitCommand(env, &command->u.reportVMInit);
+            handleReportVMInitCommand(env, &command->u.reportVMInit, JDWP_EVENT(VM_INIT));
             break;
         case COMMAND_SUSPEND_THREAD:
             handleSuspendThreadCommand(env, &command->u.suspendThread);
             break;
+#if defined(J9VM_OPT_CRIU_SUPPORT)
+        case COMMAND_REPORT_VM_RESTORE:
+            handleReportVMInitCommand(env, &command->u.reportVMInit, JDWP_EVENT(VM_RESTORE));
+            break;
+#endif /* defined(J9VM_OPT_CRIU_SUPPORT) */
         default:
             EXIT_ERROR(AGENT_ERROR_INVALID_EVENT_TYPE,"Event Helper Command");
             break;
@@ -881,7 +910,7 @@ saveEventInfoRefs(JNIEnv *env, EventInfo *evinfo)
             break;
     }
 
-    if (JNI_FUNC_PTR(env,ExceptionOccurred)(env)) {
+    if (JNI_FUNC_PTR(env,ExceptionCheck)(env)) {
         EXIT_ERROR(AGENT_ERROR_INVALID_EVENT_TYPE,"ExceptionOccurred");
     }
 }
@@ -1144,14 +1173,21 @@ eventHelper_reportInvokeDone(jbyte sessionID, jthread thread)
  * because the JVMTI event does not contain a thread.
  */
 void
-eventHelper_reportVMInit(JNIEnv *env, jbyte sessionID, jthread thread, jbyte suspendPolicy)
+eventHelper_reportVMInit(JNIEnv *env, jbyte sessionID, jthread thread, jbyte suspendPolicy, jboolean isVMRestore)
 {
     HelperCommand *command = jvmtiAllocate(sizeof(*command));
     if (command == NULL) {
         EXIT_ERROR(AGENT_ERROR_OUT_OF_MEMORY,"HelperCommmand");
     }
     (void)memset(command, 0, sizeof(*command));
-    command->commandKind = COMMAND_REPORT_VM_INIT;
+#if defined(J9VM_OPT_CRIU_SUPPORT)
+    if (isVMRestore) {
+        command->commandKind = COMMAND_REPORT_VM_RESTORE;
+    } else
+#endif /* defined(J9VM_OPT_CRIU_SUPPORT) */
+    {
+        command->commandKind = COMMAND_REPORT_VM_INIT;
+    }
     command->sessionID = sessionID;
     saveGlobalRef(env, thread, &(command->u.reportVMInit.thread));
     command->u.reportVMInit.suspendPolicy = suspendPolicy;

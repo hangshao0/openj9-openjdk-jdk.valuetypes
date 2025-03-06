@@ -1,5 +1,6 @@
+/*[INCLUDE-IF JAVA_SPEC_VERSION >= 8]*/
 /*
- * Copyright (c) 2003, 2011, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2003, 2023, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -52,10 +53,20 @@
  * @since   1.5
  */
 
+/*
+ * ===========================================================================
+ * (c) Copyright IBM Corp. 2022, 2022 All Rights Reserved
+ * ===========================================================================
+ */
+
 package java.lang;
 
-import java.io.*;
 import java.util.*;
+/*[IF CRIU_SUPPORT]*/
+import openj9.internal.criu.InternalCRIUSupport;
+/*[ENDIF] CRIU_SUPPORT*/
+
+import static java.lang.ProcessImpl.JNU_CHARSET;
 
 
 final class ProcessEnvironment
@@ -63,26 +74,99 @@ final class ProcessEnvironment
     private static final HashMap<Variable,Value> theEnvironment;
     private static final Map<String,String> theUnmodifiableEnvironment;
     static final int MIN_NAME_LENGTH = 0;
+/*[IF CRIU_SUPPORT]*/
+    // CRIU enable flag
+    private static final boolean isCRIUEnabled;
+    // 1 - prints a message if the env var was set but not in the immutable list
+    // 2 - throws an exception
+    private static final int tracePrunedEnvVarsValue;
+    private static final Map<String,String> theOriginalUnmodifiableEnvironment;
+/*[ENDIF] CRIU_SUPPORT*/
 
     static {
         // We cache the C environment.  This means that subsequent calls
         // to putenv/setenv from C will not be visible from Java code.
         byte[][] environ = environ();
+/*[IF CRIU_SUPPORT]*/
+        isCRIUEnabled = InternalCRIUSupport.isCRIUSupportEnabled();
+        HashMap<Variable,Value> origEnvironment = null;
+        HashMap<Variable,Value> criuEnvironment = null;
+        Set<String> criuImmutableEnvVarList = null;
+        if (isCRIUEnabled) {
+            String strTracePrunedEnvVars = System.internalGetProperties().getProperty("org.eclipse.openj9.criu.TracePrunedEnvVars");
+            if (strTracePrunedEnvVars != null) {
+                tracePrunedEnvVarsValue = Integer.valueOf(strTracePrunedEnvVars);
+                if (tracePrunedEnvVarsValue > 2 || tracePrunedEnvVarsValue < 1) {
+                    throw new InternalError("CRIU: org.eclipse.openj9.criu.TracePrunedEnvVars unexpected value: " + String.valueOf(tracePrunedEnvVarsValue));
+                }
+            } else {
+                tracePrunedEnvVarsValue = 0;
+            }
+            // CRIU immutable env var list
+            String propImmutableEnvVars = System.internalGetProperties().getProperty("org.eclipse.openj9.criu.ImmutableEnvVars");
+            String[] immutableEnvVarArray = (propImmutableEnvVars == null) ? new String[] {} : propImmutableEnvVars.split(",");
+            criuImmutableEnvVarList = new HashSet<String>(Arrays.asList(immutableEnvVarArray));
+            // hardcoded list
+            criuImmutableEnvVarList.add("LANG");
+            criuImmutableEnvVarList.add("LC_ALL");
+            criuImmutableEnvVarList.add("LC_CTYPE");
+            criuEnvironment = new HashMap<>(criuImmutableEnvVarList.size() + 3);
+        } else {
+            tracePrunedEnvVarsValue = 0;
+        }
+        origEnvironment = new HashMap<>(environ.length/2 + 3);
+/*[ELSE] CRIU_SUPPORT*/
         theEnvironment = new HashMap<>(environ.length/2 + 3);
+/*[ENDIF] CRIU_SUPPORT*/
         // Read environment variables back to front,
         // so that earlier variables override later ones.
         for (int i = environ.length-1; i > 0; i-=2)
+/*[IF CRIU_SUPPORT]*/
+        {
+            Variable tmpKeyVar = Variable.valueOf(environ[i-1]);
+            if (isCRIUEnabled && criuImmutableEnvVarList.contains(tmpKeyVar.toString())) {
+                criuEnvironment.put(tmpKeyVar, Value.valueOf(environ[i]));
+            }
+            origEnvironment.put(tmpKeyVar, Value.valueOf(environ[i]));
+        }
+        if (isCRIUEnabled) {
+            theOriginalUnmodifiableEnvironment = Collections.unmodifiableMap(new StringEnvironment(origEnvironment));
+            theUnmodifiableEnvironment = Collections.unmodifiableMap(new StringEnvironment(criuEnvironment));
+            theEnvironment = criuEnvironment;
+        } else {
+            theUnmodifiableEnvironment = Collections.unmodifiableMap(new StringEnvironment(origEnvironment));
+            theOriginalUnmodifiableEnvironment = null;
+            theEnvironment = origEnvironment;
+        }
+/*[ELSE] CRIU_SUPPORT*/
             theEnvironment.put(Variable.valueOf(environ[i-1]),
                                Value.valueOf(environ[i]));
 
         theUnmodifiableEnvironment
             = Collections.unmodifiableMap
             (new StringEnvironment(theEnvironment));
+/*[ENDIF] CRIU_SUPPORT*/
     }
 
     /* Only for use by System.getenv(String) */
     static String getenv(String name) {
+/*[IF CRIU_SUPPORT]*/
+        String currentValue = theUnmodifiableEnvironment.get(name);
+        if (isCRIUEnabled && (currentValue == null)) {
+            String origValue = theOriginalUnmodifiableEnvironment.get(name);
+            if (origValue != null) {
+                String errMsg = "The env var (" + name + ") is not in CRIU immutable list but was set to : " + origValue;
+                if (tracePrunedEnvVarsValue == 1) {
+                    System.err.println(errMsg);
+                } else if (tracePrunedEnvVarsValue == 2) {
+                    throw new InternalError(errMsg);
+                }
+            }
+        }
+        return currentValue;
+/*[ELSE] CRIU_SUPPORT*/
         return theUnmodifiableEnvironment.get(name);
+/*[ENDIF] CRIU_SUPPORT*/
     }
 
     /* Only for use by System.getenv() */
@@ -143,11 +227,11 @@ final class ProcessEnvironment
 
         public boolean equals(Object o) {
             return o instanceof ExternalData
-                && arrayEquals(getBytes(), ((ExternalData) o).getBytes());
+                && Arrays.equals(getBytes(), ((ExternalData) o).getBytes());
         }
 
         public int hashCode() {
-            return arrayHash(getBytes());
+            return Arrays.hashCode(getBytes());
         }
     }
 
@@ -163,7 +247,7 @@ final class ProcessEnvironment
         }
 
         public static Variable valueOfQueryOnly(String str) {
-            return new Variable(str, str.getBytes());
+            return new Variable(str, str.getBytes(JNU_CHARSET));
         }
 
         public static Variable valueOf(String str) {
@@ -172,11 +256,11 @@ final class ProcessEnvironment
         }
 
         public static Variable valueOf(byte[] bytes) {
-            return new Variable(new String(bytes), bytes);
+            return new Variable(new String(bytes, JNU_CHARSET), bytes);
         }
 
         public int compareTo(Variable variable) {
-            return arrayCompare(getBytes(), variable.getBytes());
+            return Arrays.compare(getBytes(), variable.getBytes());
         }
 
         public boolean equals(Object o) {
@@ -196,7 +280,7 @@ final class ProcessEnvironment
         }
 
         public static Value valueOfQueryOnly(String str) {
-            return new Value(str, str.getBytes());
+            return new Value(str, str.getBytes(JNU_CHARSET));
         }
 
         public static Value valueOf(String str) {
@@ -205,11 +289,11 @@ final class ProcessEnvironment
         }
 
         public static Value valueOf(byte[] bytes) {
-            return new Value(new String(bytes), bytes);
+            return new Value(new String(bytes, JNU_CHARSET), bytes);
         }
 
         public int compareTo(Value value) {
-            return arrayCompare(getBytes(), value.getBytes());
+            return Arrays.compare(getBytes(), value.getBytes());
         }
 
         public boolean equals(Object o) {
@@ -408,33 +492,6 @@ final class ProcessEnvironment
         public boolean remove(Object o) {
             return s.remove(Variable.valueOfQueryOnly(o));
         }
-    }
-
-    // Replace with general purpose method someday
-    private static int arrayCompare(byte[]x, byte[] y) {
-        int min = x.length < y.length ? x.length : y.length;
-        for (int i = 0; i < min; i++)
-            if (x[i] != y[i])
-                return x[i] - y[i];
-        return x.length - y.length;
-    }
-
-    // Replace with general purpose method someday
-    private static boolean arrayEquals(byte[] x, byte[] y) {
-        if (x.length != y.length)
-            return false;
-        for (int i = 0; i < x.length; i++)
-            if (x[i] != y[i])
-                return false;
-        return true;
-    }
-
-    // Replace with general purpose method someday
-    private static int arrayHash(byte[] x) {
-        int hash = 0;
-        for (int i = 0; i < x.length; i++)
-            hash = 31 * hash + x[i];
-        return hash;
     }
 
 }

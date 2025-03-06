@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1996, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1996, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,16 +25,28 @@
 
 package java.lang.reflect;
 
+import jdk.internal.javac.PreviewFeature;
+
 import java.util.StringJoiner;
 
 /**
  * The Modifier class provides {@code static} methods and
- * constants to decode class and member access modifiers.  The sets of
- * modifiers are represented as integers with distinct bit positions
+ * constants to decode class and member access modifiers.
+ * The {@link AccessFlag} class should be used instead of this class.
+ * The sets of modifiers are represented as integers with non-distinct bit positions
  * representing different modifiers.  The values for the constants
  * representing the modifiers are taken from the tables in sections
  * {@jvms 4.1}, {@jvms 4.4}, {@jvms 4.5}, and {@jvms 4.7} of
  * <cite>The Java Virtual Machine Specification</cite>.
+ *
+ * @apiNote
+ * Not all modifiers that are syntactic Java language modifiers are
+ * represented in this class, only those modifiers that <em>also</em>
+ * have a corresponding JVM {@linkplain AccessFlag access flag} are
+ * included. In particular, the {@code default} method modifier (JLS
+ * {@jls 9.4.3}) and the {@code value}, {@code sealed} and {@code non-sealed} class
+ * (JLS {@jls 8.1.1.2}) and interface (JLS {@jls 9.1.1.4}) modifiers
+ * are <em>not</em> represented in this class.
  *
  * @see Class#getModifiers()
  * @see Member#getModifiers()
@@ -43,7 +55,7 @@ import java.util.StringJoiner;
  * @author Kenneth Russell
  * @since 1.1
  */
-public class Modifier {
+public final class Modifier {
     /**
      * Do not call.
      */
@@ -114,12 +126,33 @@ public class Modifier {
      * Return {@code true} if the integer argument includes the
      * {@code synchronized} modifier, {@code false} otherwise.
      *
+     * @apiNote {@code isSynchronized} should only be called with the modifiers
+     * of a {@linkplain Method#getModifiers() method}.
+     *
      * @param   mod a set of modifiers
      * @return {@code true} if {@code mod} includes the
      * {@code synchronized} modifier; {@code false} otherwise.
      */
     public static boolean isSynchronized(int mod) {
         return (mod & SYNCHRONIZED) != 0;
+    }
+
+    /**
+     * Return {@code true} if the integer argument includes the
+     * {@code identity} modifier, {@code false} otherwise.
+     *
+     * @apiNote {@code isIdentity} should only be called with the modifiers
+     * of a {@linkplain Class#getModifiers() class}.
+     *
+     * @param   mod a set of modifiers
+     * @return {@code true} if {@code mod} includes the
+     * {@code identity} modifier; {@code false} otherwise.
+     *
+     * @since Valhalla
+     */
+    @PreviewFeature(feature = PreviewFeature.Feature.VALUE_OBJECTS, reflective=true)
+    public static boolean isIdentity(int mod) {
+        return (mod & IDENTITY) != 0;
     }
 
     /**
@@ -198,7 +231,7 @@ public class Modifier {
      * Return a string describing the access modifier flags in
      * the specified modifier. For example:
      * <blockquote><pre>
-     *    public final synchronized strictfp
+     *    public final synchronized
      * </pre></blockquote>
      * The modifier names are returned in an order consistent with the
      * suggested modifier orderings given in sections 8.1.1, 8.3.1, 8.4.3, 8.8.3, and 9.1.1 of
@@ -208,6 +241,7 @@ public class Modifier {
      * public protected private abstract static final transient
      * volatile synchronized native strictfp
      * interface } </blockquote>
+     *
      * The {@code interface} modifier discussed in this class is
      * not a true modifier in the Java language and it appears after
      * all other modifiers listed by this method.  This method may
@@ -220,6 +254,22 @@ public class Modifier {
      * such as a constructor or method, first AND the argument of
      * {@code toString} with the appropriate mask from a method like
      * {@link #constructorModifiers} or {@link #methodModifiers}.
+     *
+     * @apiNote
+     * To make a high-fidelity representation of the Java source
+     * modifiers of a class or member, source-level modifiers that do
+     * <em>not</em> have a constant in this class should be included
+     * and appear in an order consistent with the full recommended
+     * ordering for that kind of declaration as given in <cite>The
+     * Java Language Specification</cite>. For example, for a
+     * {@linkplain Method#toGenericString() method} the "{@link
+     * Method#isDefault() default}" modifier is ordered immediately
+     * before "{@code static}" (JLS {@jls 9.4}). For a {@linkplain
+     * Class#toGenericString() class object}, the "{@link
+     * Class#isSealed() sealed}" or {@code "non-sealed"} modifier is
+     * ordered immediately after "{@code final}" for a class (JLS
+     * {@jls 8.1.1}) and immediately after "{@code static}" for an
+     * interface (JLS {@jls 9.1.1}).
      *
      * @param   mod a set of modifiers
      * @return  a string representation of the set of modifiers
@@ -254,72 +304,93 @@ public class Modifier {
     /**
      * The {@code int} value representing the {@code public}
      * modifier.
+     * @see AccessFlag#PUBLIC
      */
     public static final int PUBLIC           = 0x00000001;
 
     /**
      * The {@code int} value representing the {@code private}
      * modifier.
+     * @see AccessFlag#PRIVATE
      */
     public static final int PRIVATE          = 0x00000002;
 
     /**
      * The {@code int} value representing the {@code protected}
      * modifier.
+     * @see AccessFlag#PROTECTED
      */
     public static final int PROTECTED        = 0x00000004;
 
     /**
      * The {@code int} value representing the {@code static}
      * modifier.
+     * @see AccessFlag#STATIC
      */
     public static final int STATIC           = 0x00000008;
 
     /**
      * The {@code int} value representing the {@code final}
      * modifier.
+     * @see AccessFlag#FINAL
      */
     public static final int FINAL            = 0x00000010;
 
     /**
      * The {@code int} value representing the {@code synchronized}
      * modifier.
+     * @see AccessFlag#SYNCHRONIZED
      */
     public static final int SYNCHRONIZED     = 0x00000020;
 
     /**
+     * The {@code int} value representing the {@code ACC_IDENTITY}
+     * modifier.
+     *
+     * @since Valhalla
+     */
+    @PreviewFeature(feature = PreviewFeature.Feature.VALUE_OBJECTS, reflective=true)
+    public static final int IDENTITY         = 0x00000020;
+
+    /**
      * The {@code int} value representing the {@code volatile}
      * modifier.
+     * @see AccessFlag#VOLATILE
      */
     public static final int VOLATILE         = 0x00000040;
 
     /**
      * The {@code int} value representing the {@code transient}
      * modifier.
+     * @see AccessFlag#TRANSIENT
      */
     public static final int TRANSIENT        = 0x00000080;
 
     /**
      * The {@code int} value representing the {@code native}
      * modifier.
+     * @see AccessFlag#NATIVE
      */
     public static final int NATIVE           = 0x00000100;
 
     /**
      * The {@code int} value representing the {@code interface}
      * modifier.
+     * @see AccessFlag#INTERFACE
      */
     public static final int INTERFACE        = 0x00000200;
 
     /**
      * The {@code int} value representing the {@code abstract}
      * modifier.
+     * @see AccessFlag#ABSTRACT
      */
     public static final int ABSTRACT         = 0x00000400;
 
     /**
      * The {@code int} value representing the {@code strictfp}
      * modifier.
+     * @see AccessFlag#STRICT and AccessFlag#STRICT_FIELD
      */
     public static final int STRICT           = 0x00000800;
 
@@ -327,13 +398,12 @@ public class Modifier {
     // have different meanings for fields and methods and there is no
     // way to distinguish between the two in this class, or because
     // they are not Java programming language keywords
-    static final int BRIDGE      = 0x00000040;
-    static final int VARARGS     = 0x00000080;
-    static final int SYNTHETIC   = 0x00001000;
+    static final int BRIDGE    = 0x00000040;
+    static final int VARARGS   = 0x00000080;
+    static final int SYNTHETIC = 0x00001000;
     static final int ANNOTATION  = 0x00002000;
-    static final int ENUM        = 0x00004000;
-    static final int MANDATED    = 0x00008000;
-    static final int FLATTENED   = 0x00008000;      // HotSpot-specific bit
+    static final int ENUM      = 0x00004000;
+    static final int MANDATED  = 0x00008000;
     static boolean isSynthetic(int mod) {
       return (mod & SYNTHETIC) != 0;
     }
@@ -359,7 +429,7 @@ public class Modifier {
     private static final int CLASS_MODIFIERS =
         Modifier.PUBLIC         | Modifier.PROTECTED    | Modifier.PRIVATE |
         Modifier.ABSTRACT       | Modifier.STATIC       | Modifier.FINAL   |
-        Modifier.STRICT;
+        Modifier.IDENTITY       | Modifier.STRICT;
 
     /**
      * The Java source modifiers that can be applied to an interface.
@@ -393,7 +463,7 @@ public class Modifier {
     private static final int FIELD_MODIFIERS =
         Modifier.PUBLIC         | Modifier.PROTECTED    | Modifier.PRIVATE |
         Modifier.STATIC         | Modifier.FINAL        | Modifier.TRANSIENT |
-        Modifier.VOLATILE;
+        Modifier.VOLATILE       | Modifier.STRICT;
 
     /**
      * The Java source modifiers that can be applied to a method or constructor parameter.

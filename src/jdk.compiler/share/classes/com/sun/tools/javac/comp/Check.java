@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -23,11 +23,22 @@
  * questions.
  */
 
+/*
+ * ===========================================================================
+ * (c) Copyright IBM Corp. 2024, 2024 All Rights Reserved
+ * ===========================================================================
+ */
+
 package com.sun.tools.javac.comp;
 
 import java.util.*;
+import java.util.function.BiConsumer;
+import java.util.function.BiPredicate;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
+import java.util.function.ToIntBiFunction;
+import java.util.stream.Collectors;
+import java.util.stream.StreamSupport;
 
 import javax.lang.model.element.ElementKind;
 import javax.lang.model.element.NestingKind;
@@ -44,13 +55,14 @@ import com.sun.tools.javac.jvm.*;
 import com.sun.tools.javac.resources.CompilerProperties.Errors;
 import com.sun.tools.javac.resources.CompilerProperties.Fragments;
 import com.sun.tools.javac.resources.CompilerProperties.Warnings;
+import com.sun.tools.javac.resources.CompilerProperties.LintWarnings;
 import com.sun.tools.javac.tree.*;
 import com.sun.tools.javac.util.*;
 import com.sun.tools.javac.util.JCDiagnostic.DiagnosticFlag;
 import com.sun.tools.javac.util.JCDiagnostic.DiagnosticPosition;
 import com.sun.tools.javac.util.JCDiagnostic.Error;
 import com.sun.tools.javac.util.JCDiagnostic.Fragment;
-import com.sun.tools.javac.util.JCDiagnostic.Warning;
+import com.sun.tools.javac.util.JCDiagnostic.LintWarning;
 import com.sun.tools.javac.util.List;
 
 import com.sun.tools.javac.code.Lint;
@@ -67,10 +79,15 @@ import static com.sun.tools.javac.code.Flags.SYNCHRONIZED;
 import static com.sun.tools.javac.code.Kinds.*;
 import static com.sun.tools.javac.code.Kinds.Kind.*;
 import static com.sun.tools.javac.code.Scope.LookupKind.NON_RECURSIVE;
+import static com.sun.tools.javac.code.Scope.LookupKind.RECURSIVE;
 import static com.sun.tools.javac.code.TypeTag.*;
 import static com.sun.tools.javac.code.TypeTag.WILDCARD;
 
 import static com.sun.tools.javac.tree.JCTree.Tag.*;
+import javax.lang.model.element.Element;
+import javax.lang.model.element.TypeElement;
+import javax.lang.model.type.DeclaredType;
+import javax.lang.model.util.ElementKindVisitor14;
 
 /** Type checking helper class for the attribution phase.
  *
@@ -81,6 +98,10 @@ import static com.sun.tools.javac.tree.JCTree.Tag.*;
  */
 public class Check {
     protected static final Context.Key<Check> checkKey = new Context.Key<>();
+
+    // Flag bits indicating which item(s) chosen from a pair of items
+    private static final int FIRST = 0x01;
+    private static final int SECOND = 0x02;
 
     private final Names names;
     private final Log log;
@@ -99,10 +120,12 @@ public class Check {
     private final Preview preview;
     private final boolean warnOnAnyAccessToMembers;
 
+    public boolean disablePreviewCheck;
+
     // The set of lint options currently in effect. It is initialized
     // from the context, and then is set/reset as needed by Attr as it
     // visits all the various parts of the trees during attribution.
-    private Lint lint;
+    Lint lint;
 
     // The method being analyzed in Attr - it is set/reset as needed by
     // Attr as it visits new method declarations.
@@ -115,6 +138,7 @@ public class Check {
         return instance;
     }
 
+    @SuppressWarnings("this-escape")
     protected Check(Context context) {
         context.put(checkKey, this);
 
@@ -135,6 +159,9 @@ public class Check {
         source = Source.instance(context);
         target = Target.instance(context);
         warnOnAnyAccessToMembers = options.isSet("warnOnAccessToMembers");
+
+        disablePreviewCheck = false;
+
         Target target = Target.instance(context);
         syntheticNameChar = target.syntheticNameChar();
 
@@ -147,19 +174,19 @@ public class Check {
         boolean enforceMandatoryWarnings = true;
 
         deprecationHandler = new MandatoryWarningHandler(log, null, verboseDeprecated,
-                enforceMandatoryWarnings, "deprecated", LintCategory.DEPRECATION);
+                enforceMandatoryWarnings, LintCategory.DEPRECATION, "deprecated");
         removalHandler = new MandatoryWarningHandler(log, null, verboseRemoval,
-                enforceMandatoryWarnings, "removal", LintCategory.REMOVAL);
+                enforceMandatoryWarnings, LintCategory.REMOVAL);
         uncheckedHandler = new MandatoryWarningHandler(log, null, verboseUnchecked,
-                enforceMandatoryWarnings, "unchecked", LintCategory.UNCHECKED);
-        sunApiHandler = new MandatoryWarningHandler(log, null, false,
-                enforceMandatoryWarnings, "sunapi", null);
+                enforceMandatoryWarnings, LintCategory.UNCHECKED);
 
         deferredLintHandler = DeferredLintHandler.instance(context);
 
         allowModules = Feature.MODULES.allowedInSource(source);
         allowRecords = Feature.RECORDS.allowedInSource(source);
         allowSealed = Feature.SEALED_CLASSES.allowedInSource(source);
+        allowValueClasses = (!preview.isPreview(Feature.VALUE_CLASSES) || preview.isEnabled()) &&
+                Feature.VALUE_CLASSES.allowedInSource(source);
     }
 
     /** Character for synthetic names
@@ -183,10 +210,6 @@ public class Check {
      */
     private MandatoryWarningHandler uncheckedHandler;
 
-    /** A handler for messages about using proprietary API.
-     */
-    private MandatoryWarningHandler sunApiHandler;
-
     /** A handler for deferred lint warnings.
      */
     private DeferredLintHandler deferredLintHandler;
@@ -202,6 +225,10 @@ public class Check {
     /** Are sealed classes allowed
      */
     private final boolean allowSealed;
+
+    /** Are value classes allowed
+     */
+    private final boolean allowValueClasses;
 
 /* *************************************************************************
  * Errors and Warnings
@@ -227,16 +254,16 @@ public class Check {
         if (sym.isDeprecatedForRemoval()) {
             if (!lint.isSuppressed(LintCategory.REMOVAL)) {
                 if (sym.kind == MDL) {
-                    removalHandler.report(pos, Warnings.HasBeenDeprecatedForRemovalModule(sym));
+                    removalHandler.report(pos, LintWarnings.HasBeenDeprecatedForRemovalModule(sym));
                 } else {
-                    removalHandler.report(pos, Warnings.HasBeenDeprecatedForRemoval(sym, sym.location()));
+                    removalHandler.report(pos, LintWarnings.HasBeenDeprecatedForRemoval(sym, sym.location()));
                 }
             }
         } else if (!lint.isSuppressed(LintCategory.DEPRECATION)) {
             if (sym.kind == MDL) {
-                deprecationHandler.report(pos, Warnings.HasBeenDeprecatedModule(sym));
+                deprecationHandler.report(pos, LintWarnings.HasBeenDeprecatedModule(sym));
             } else {
-                deprecationHandler.report(pos, Warnings.HasBeenDeprecated(sym, sym.location()));
+                deprecationHandler.report(pos, LintWarnings.HasBeenDeprecated(sym, sym.location()));
             }
         }
     }
@@ -245,7 +272,7 @@ public class Check {
      *  @param pos        Position to be used for error reporting.
      *  @param msg        A Warning describing the problem.
      */
-    public void warnPreviewAPI(DiagnosticPosition pos, Warning warnKey) {
+    public void warnPreviewAPI(DiagnosticPosition pos, LintWarning warnKey) {
         if (!lint.isSuppressed(LintCategory.PREVIEW))
             preview.reportPreviewWarning(pos, warnKey);
     }
@@ -256,37 +283,24 @@ public class Check {
      */
     public void warnDeclaredUsingPreview(DiagnosticPosition pos, Symbol sym) {
         if (!lint.isSuppressed(LintCategory.PREVIEW))
-            preview.reportPreviewWarning(pos, Warnings.DeclaredUsingPreview(kindName(sym), sym));
+            preview.reportPreviewWarning(pos, LintWarnings.DeclaredUsingPreview(kindName(sym), sym));
+    }
+
+    /** Log a preview warning.
+     *  @param pos        Position to be used for error reporting.
+     *  @param msg        A Warning describing the problem.
+     */
+    public void warnRestrictedAPI(DiagnosticPosition pos, Symbol sym) {
+        lint.logIfEnabled(pos, LintWarnings.RestrictedMethod(sym.enclClass(), sym));
     }
 
     /** Warn about unchecked operation.
      *  @param pos        Position to be used for error reporting.
      *  @param msg        A string describing the problem.
      */
-    public void warnUnchecked(DiagnosticPosition pos, Warning warnKey) {
+    public void warnUnchecked(DiagnosticPosition pos, LintWarning warnKey) {
         if (!lint.isSuppressed(LintCategory.UNCHECKED))
             uncheckedHandler.report(pos, warnKey);
-    }
-
-    /** Warn about unsafe vararg method decl.
-     *  @param pos        Position to be used for error reporting.
-     */
-    void warnUnsafeVararg(DiagnosticPosition pos, Warning warnKey) {
-        if (lint.isEnabled(LintCategory.VARARGS))
-            log.warning(LintCategory.VARARGS, pos, warnKey);
-    }
-
-    public void warnStatic(DiagnosticPosition pos, Warning warnKey) {
-        if (lint.isEnabled(LintCategory.STATIC))
-            log.warning(LintCategory.STATIC, pos, warnKey);
-    }
-
-    /** Warn about division by integer constant zero.
-     *  @param pos        Position to be used for error reporting.
-     */
-    void warnDivZero(DiagnosticPosition pos) {
-        if (lint.isEnabled(LintCategory.DIVZERO))
-            log.warning(LintCategory.DIVZERO, pos, Warnings.DivZero);
     }
 
     /**
@@ -296,7 +310,6 @@ public class Check {
         deprecationHandler.reportDeferredDiagnostic();
         removalHandler.reportDeferredDiagnostic();
         uncheckedHandler.reportDeferredDiagnostic();
-        sunApiHandler.reportDeferredDiagnostic();
     }
 
 
@@ -324,15 +337,6 @@ public class Check {
         }
         log.error(pos, Errors.TypeFoundReq(found, required));
         return types.createErrorType(found instanceof Type type ? type : syms.errType);
-    }
-
-    /** Report an error that symbol cannot be referenced before super
-     *  has been called.
-     *  @param pos        Position to be used for error reporting.
-     *  @param sym        The referenced symbol.
-     */
-    void earlyRefError(DiagnosticPosition pos, Symbol sym) {
-        log.error(pos, Errors.CantRefBeforeCtorCalled(sym));
     }
 
     /** Report duplicate declaration error.
@@ -428,7 +432,8 @@ public class Check {
             }
         }
         for (Symbol sym = s.owner; sym != null; sym = sym.owner) {
-            if (sym.kind == TYP && sym.name == name && sym.name != names.error) {
+            if (sym.kind == TYP && sym.name == name && sym.name != names.error &&
+                    !sym.isImplicit()) {
                 duplicateError(pos, sym);
                 return true;
             }
@@ -480,7 +485,6 @@ public class Check {
         deprecationHandler.clear();
         removalHandler.clear();
         uncheckedHandler.clear();
-        sunApiHandler.clear();
     }
 
     public void putCompiled(ClassSymbol csym) {
@@ -499,7 +503,7 @@ public class Check {
         compiled.remove(Pair.of(csym.packge().modle, csym.flatname));
     }
 
-    /* *************************************************************************
+/* *************************************************************************
  * Type Checking
  **************************************************************************/
 
@@ -605,11 +609,6 @@ public class Check {
         if (inferenceContext.free(req) || inferenceContext.free(found)) {
             inferenceContext.addFreeTypeListener(List.of(req, found),
                     solvedContext -> checkType(pos, solvedContext.asInstType(found), solvedContext.asInstType(req), checkContext));
-        } else {
-            if (found.hasTag(CLASS)) {
-                if (inferenceContext != infer.emptyContext)
-                    checkParameterizationByPrimitiveClass(pos, found);
-            }
         }
         if (req.hasTag(ERROR))
             return req;
@@ -653,10 +652,8 @@ public class Check {
                 && types.isSameType(tree.expr.type, tree.clazz.type)
                 && !(ignoreAnnotatedCasts && TreeInfo.containsTypeAnnotation(tree.clazz))
                 && !is292targetTypeCast(tree)) {
-            deferredLintHandler.report(() -> {
-                if (lint.isEnabled(LintCategory.CAST))
-                    log.warning(LintCategory.CAST,
-                            tree.pos(), Warnings.RedundantCast(tree.clazz.type));
+            deferredLintHandler.report(_l -> {
+                lint.logIfEnabled(tree.pos(), LintWarnings.RedundantCast(tree.clazz.type));
             });
         }
     }
@@ -740,43 +737,24 @@ public class Check {
                                     : t;
         }
 
-    void checkSuperConstraintsOfPrimitiveClass(DiagnosticPosition pos, ClassSymbol c) {
-        for(Type st = types.supertype(c.type); st != Type.noType; st = types.supertype(st)) {
+    void checkConstraintsOfValueClass(JCClassDecl tree, ClassSymbol c) {
+        DiagnosticPosition pos = tree.pos();
+        for (Type st : types.closure(c.type)) {
             if (st == null || st.tsym == null || st.tsym.kind == ERR)
-                return;
-            if  (st.tsym == syms.objectType.tsym)
-                return;
+                continue;
+            if  (st.tsym == syms.objectType.tsym || st.tsym == syms.recordType.tsym || st.isInterface())
+                continue;
             if (!st.tsym.isAbstract()) {
-                log.error(pos, Errors.ConcreteSupertypeForPrimitiveClass(c, st));
+                if (c != st.tsym) {
+                    log.error(pos, Errors.ConcreteSupertypeForValueClass(c, st));
+                }
+                continue;
             }
-            if ((st.tsym.flags() & HASINITBLOCK) != 0) {
-                log.error(pos, Errors.SuperClassDeclaresInitBlock(c, st));
-            }
-            // No instance fields and no arged constructors both mean inner classes
-            // cannot be super classes for primitive classes.
-            Type encl = st.getEnclosingType();
-            if (encl != null && encl.hasTag(CLASS)) {
-                log.error(pos, Errors.SuperClassCannotBeInner(c, st));
-            }
+            // dealing with an abstract value or value super class below.
             for (Symbol s : st.tsym.members().getSymbols(NON_RECURSIVE)) {
-                switch (s.kind) {
-                case VAR:
-                    if ((s.flags() & STATIC) == 0) {
-                        log.error(pos, Errors.SuperFieldNotAllowed(s, c, st));
-                    }
-                    break;
-                case MTH:
-                    if ((s.flags() & SYNCHRONIZED) != 0) {
-                        log.error(pos, Errors.SuperMethodCannotBeSynchronized(s, c, st));
-                    } else if (s.isConstructor()) {
-                        MethodSymbol m = (MethodSymbol)s;
-                        if (m.getParameters().size() > 0) {
-                            log.error(pos, Errors.SuperConstructorCannotTakeArguments(m, c, st));
-                        } else {
-                            if ((m.flags() & (GENERATEDCONSTR | EMPTYNOARGCONSTR)) == 0) {
-                                log.error(pos, Errors.SuperNoArgConstructorMustBeEmpty(m, c, st));
-                            }
-                        }
+                if (s.kind == MTH) {
+                    if ((s.flags() & (SYNCHRONIZED | STATIC)) == SYNCHRONIZED) {
+                        log.error(pos, Errors.SuperClassMethodCannotBeSynchronized(s, c, st));
                     }
                     break;
                 }
@@ -786,33 +764,21 @@ public class Check {
 
     /** Check that type is a valid qualifier for a constructor reference expression
      */
-    Type checkConstructorRefType(JCExpression expr, Type t) {
-        t = checkClassOrArrayType(expr, t);
+    Type checkConstructorRefType(DiagnosticPosition pos, Type t) {
+        t = checkClassOrArrayType(pos, t);
         if (t.hasTag(CLASS)) {
             if ((t.tsym.flags() & (ABSTRACT | INTERFACE)) != 0) {
-                log.error(expr, Errors.AbstractCantBeInstantiated(t.tsym));
+                log.error(pos, Errors.AbstractCantBeInstantiated(t.tsym));
                 t = types.createErrorType(t);
             } else if ((t.tsym.flags() & ENUM) != 0) {
-                log.error(expr, Errors.EnumCantBeInstantiated);
+                log.error(pos, Errors.EnumCantBeInstantiated);
                 t = types.createErrorType(t);
             } else {
-                // Projection types may not be mentioned in constructor references
-                JCExpression instantiation = expr;
-                if (instantiation.hasTag(TYPEAPPLY))
-                    instantiation = ((JCTypeApply) instantiation).clazz;
-                if (instantiation.hasTag(SELECT)) {
-                    JCFieldAccess fieldAccess = (JCFieldAccess) instantiation;
-                    if (fieldAccess.selected.type.tsym.isPrimitiveClass() &&
-                            (fieldAccess.name == names.ref || fieldAccess.name == names.val)) {
-                        log.error(expr, Errors.ProjectionCantBeInstantiated);
-                        t = types.createErrorType(t);
-                    }
-                }
-                t = checkClassType(expr, t, true);
+                t = checkClassType(pos, t, true);
             }
         } else if (t.hasTag(ARRAY)) {
             if (!types.isReifiable(((ArrayType)t).elemtype)) {
-                log.error(expr, Errors.GenericArrayCreation);
+                log.error(pos, Errors.GenericArrayCreation);
                 t = types.createErrorType(t);
             }
         }
@@ -843,10 +809,9 @@ public class Check {
      *  or a type variable.
      *  @param pos           Position to be used for error reporting.
      *  @param t             The type to be checked.
-     *  @param primitiveClassOK       If false, a primitive class does not qualify
      */
-    Type checkRefType(DiagnosticPosition pos, Type t, boolean primitiveClassOK) {
-        if (t.isReference() && (primitiveClassOK || !types.isPrimitiveClass(t)))
+    Type checkRefType(DiagnosticPosition pos, Type t) {
+        if (t.isReference())
             return t;
         else
             return typeTagError(pos,
@@ -854,36 +819,30 @@ public class Check {
                                 t);
     }
 
-    /** Check that type is an identity type, i.e. not a primitive type
-     *  nor its reference projection. When not discernible statically,
-     *  give it the benefit of doubt and defer to runtime.
+    /** Check that type is an identity type, i.e. not a value type.
+     *  When not discernible statically, give it the benefit of doubt
+     *  and defer to runtime.
      *
      *  @param pos           Position to be used for error reporting.
      *  @param t             The type to be checked.
      */
-    Type checkIdentityType(DiagnosticPosition pos, Type t) {
-
-        if (t.isPrimitive() || t.tsym.isPrimitiveClass())
-            return typeTagError(pos,
-                    diags.fragment(Fragments.TypeReqIdentity),
-                    t);
-
-        /* Not appropriate to check
-         *     if (types.asSuper(t, syms.identityObjectType.tsym) != null)
-         * since jlO, interface types and abstract types may fail that check
-         * at compile time.
-         */
-
-        return t;
-    }
-
-    /** Check that type is a reference type, i.e. a class, interface or array type
-     *  or a type variable.
-     *  @param pos           Position to be used for error reporting.
-     *  @param t             The type to be checked.
-     */
-    Type checkRefType(DiagnosticPosition pos, Type t) {
-        return checkRefType(pos, t, true);
+    boolean checkIdentityType(DiagnosticPosition pos, Type t) {
+        if (t.hasTag(TYPEVAR)) {
+            t = types.skipTypeVars(t, false);
+        }
+        if (t.isIntersection()) {
+            IntersectionClassType ict = (IntersectionClassType)t;
+            boolean result = true;
+            for (Type component : ict.getExplicitComponents()) {
+                result &= checkIdentityType(pos, component);
+            }
+            return result;
+        }
+        if (t.isPrimitive() || (t.isValueClass() && !t.tsym.isAbstract())) {
+            typeTagError(pos, diags.fragment(Fragments.TypeReqIdentity), t);
+            return false;
+        }
+        return true;
     }
 
     /** Check that each type is a reference type, i.e. a class, interface or array type
@@ -894,7 +853,7 @@ public class Check {
     List<Type> checkRefTypes(List<JCExpression> trees, List<Type> types) {
         List<JCExpression> tl = trees;
         for (List<Type> l = types; l.nonEmpty(); l = l.tail) {
-            l.head = checkRefType(tl.head.pos(), l.head, false);
+            l.head = checkRefType(tl.head.pos(), l.head);
             tl = tl.tail;
         }
         return types;
@@ -929,55 +888,6 @@ public class Check {
         } else
             return true;
     }
-
-    void checkParameterizationByPrimitiveClass(DiagnosticPosition pos, Type t) {
-        parameterizationByPrimitiveClassChecker.visit(t, pos);
-    }
-
-    /** parameterizationByPrimitiveClassChecker: A type visitor that descends down the given type looking for instances of primitive classes
-     *  being used as type arguments and issues error against those usages.
-     */
-    private final Types.SimpleVisitor<Void, DiagnosticPosition> parameterizationByPrimitiveClassChecker =
-            new Types.SimpleVisitor<Void, DiagnosticPosition>() {
-
-        @Override
-        public Void visitType(Type t, DiagnosticPosition pos) {
-            return null;
-        }
-
-        @Override
-        public Void visitClassType(ClassType t, DiagnosticPosition pos) {
-            for (Type targ : t.allparams()) {
-                if (types.isPrimitiveClass(targ)) {
-                    log.error(pos, Errors.GenericParameterizationWithPrimitiveClass(t));
-                }
-                visit(targ, pos);
-            }
-            return null;
-        }
-
-        @Override
-        public Void visitTypeVar(TypeVar t, DiagnosticPosition pos) {
-             return null;
-        }
-
-        @Override
-        public Void visitCapturedType(CapturedType t, DiagnosticPosition pos) {
-            return null;
-        }
-
-        @Override
-        public Void visitArrayType(ArrayType t, DiagnosticPosition pos) {
-            return visit(t.elemtype, pos);
-        }
-
-        @Override
-        public Void visitWildcardType(WildcardType t, DiagnosticPosition pos) {
-            return visit(t.type, pos);
-        }
-    };
-
-
 
     /** Check that usage of diamond operator is correct (i.e. diamond should not
      * be used with non-generic classes or in anonymous class creation expressions)
@@ -1099,13 +1009,13 @@ public class Check {
             }
         } else if (hasTrustMeAnno && varargElemType != null &&
                             types.isReifiable(varargElemType)) {
-            warnUnsafeVararg(tree, Warnings.VarargsRedundantTrustmeAnno(
+            lint.logIfEnabled(tree, LintWarnings.VarargsRedundantTrustmeAnno(
                                 syms.trustMeType.tsym,
                                 diags.fragment(Fragments.VarargsTrustmeOnReifiableVarargs(varargElemType))));
         }
         else if (!hasTrustMeAnno && varargElemType != null &&
                 !types.isReifiable(varargElemType)) {
-            warnUnchecked(tree.params.head.pos(), Warnings.UncheckedVarargsNonReifiableType(varargElemType));
+            warnUnchecked(tree.params.head.pos(), LintWarnings.UncheckedVarargsNonReifiableType(varargElemType));
         }
     }
     //where
@@ -1127,44 +1037,7 @@ public class Check {
         }
 
         //upward project the initializer type
-        Type varType = types.upward(t, types.captures(t));
-        if (varType.hasTag(CLASS)) {
-            checkParameterizationByPrimitiveClass(pos, varType);
-        }
-        return varType;
-    }
-
-    public void checkForSuspectClassLiteralComparison(
-            final JCBinary tree,
-            final Type leftType,
-            final Type rightType) {
-
-        if (lint.isEnabled(LintCategory.MIGRATION)) {
-            if (isInvocationOfGetClass(tree.lhs) && isClassOfSomeInterface(rightType) ||
-                    isInvocationOfGetClass(tree.rhs) && isClassOfSomeInterface(leftType)) {
-                log.warning(LintCategory.MIGRATION, tree.pos(), Warnings.GetClassComparedWithInterface);
-            }
-        }
-    }
-    //where
-    private boolean isClassOfSomeInterface(Type someClass) {
-        if (someClass.tsym.flatName() == names.java_lang_Class) {
-            List<Type> arguments = someClass.getTypeArguments();
-            if (arguments.length() == 1) {
-                return arguments.head.isInterface();
-            }
-        }
-        return false;
-    }
-    //where
-    private boolean isInvocationOfGetClass(JCExpression tree) {
-        tree = TreeInfo.skipParens(tree);
-        if (tree.hasTag(APPLY)) {
-            JCMethodInvocation apply = (JCMethodInvocation)tree;
-            MethodSymbol msym = (MethodSymbol)TreeInfo.symbol(apply.meth);
-            return msym.name == names.getClass && msym.implementedIn(syms.objectType.tsym, types) != null;
-        }
-        return false;
+        return types.upward(t, types.captures(t)).baseType();
     }
 
     Type checkMethod(final Type mtype,
@@ -1229,7 +1102,7 @@ public class Check {
             if (!types.isReifiable(argtype) &&
                 (sym.baseSymbol().attribute(syms.trustMeType.tsym) == null ||
                  !isTrustMeAllowedOnMethod(sym))) {
-                warnUnchecked(env.tree.pos(), Warnings.UncheckedGenericArrayCreation(argtype));
+                warnUnchecked(env.tree.pos(), LintWarnings.UncheckedGenericArrayCreation(argtype));
             }
             TreeInfo.setVarargsElement(env.tree, types.elemtype(argtype));
          }
@@ -1346,11 +1219,12 @@ public class Check {
      *  Warning: we can't use flags() here since this method
      *  is called during class enter, when flags() would cause a premature
      *  completion.
-     *  @param pos           Position to be used for error reporting.
      *  @param flags         The set of modifiers given in a definition.
      *  @param sym           The defined symbol.
+     *  @param tree          The declaration
      */
-    long checkFlags(DiagnosticPosition pos, long flags, Symbol sym, JCTree tree) {
+    long checkFlags(long flags, Symbol sym, JCTree tree) {
+        final DiagnosticPosition pos = tree.pos();
         long mask;
         long implicit = 0;
 
@@ -1363,9 +1237,10 @@ public class Check {
             else if ((sym.owner.flags_field & INTERFACE) != 0)
                 mask = implicit = InterfaceVarFlags;
             else {
-                mask = VarFlags;
-                if (sym.owner.isPrimitiveClass() && (flags & STATIC) == 0) {
-                    implicit |= FINAL;
+                boolean isInstanceFieldOfValueClass = sym.owner.type.isValueClass() && (flags & STATIC) == 0;
+                mask = !isInstanceFieldOfValueClass ? VarFlags : ValueFieldFlags;
+                if (isInstanceFieldOfValueClass) {
+                    implicit |= FINAL | STRICT;
                 }
             }
             break;
@@ -1393,17 +1268,18 @@ public class Check {
                     mask = implicit = InterfaceMethodFlags;
                 }
             } else if ((sym.owner.flags_field & RECORD) != 0) {
-                mask = RecordMethodFlags;
+                mask = ((sym.owner.flags_field & VALUE_CLASS) != 0 && (flags & Flags.STATIC) == 0) ?
+                        RecordMethodFlags & ~SYNCHRONIZED : RecordMethodFlags;
             } else {
-                // instance methods of primitive classes do not have a monitor associated with their `this'
-                mask = ((sym.owner.flags_field & PRIMITIVE_CLASS) != 0 && (flags & Flags.STATIC) == 0) ?
+                // value objects do not have an associated monitor/lock
+                mask = ((sym.owner.flags_field & VALUE_CLASS) != 0 && (flags & Flags.STATIC) == 0) ?
                         MethodFlags & ~SYNCHRONIZED : MethodFlags;
             }
             if ((flags & STRICTFP) != 0) {
-                warnOnExplicitStrictfp(pos);
+                warnOnExplicitStrictfp(tree);
             }
             if ((flags & STRICTFP) != 0) {
-                warnOnExplicitStrictfp(pos);
+                warnOnExplicitStrictfp(tree);
             }
             // Imply STRICTFP if owner has STRICTFP set.
             if (((flags|implicit) & Flags.ABSTRACT) == 0 ||
@@ -1417,7 +1293,7 @@ public class Check {
                         ((flags & RECORD) != 0 || (flags & ENUM) != 0 || (flags & INTERFACE) != 0);
                 boolean staticOrImplicitlyStatic = (flags & STATIC) != 0 || implicitlyStatic;
                 // local statics are allowed only if records are allowed too
-                mask = staticOrImplicitlyStatic && allowRecords && (flags & ANNOTATION) == 0 ? StaticLocalFlags : LocalClassFlags;
+                mask = staticOrImplicitlyStatic && allowRecords && (flags & ANNOTATION) == 0 ? ExtendedStaticLocalClassFlags : ExtendedLocalClassFlags;
                 implicit = implicitlyStatic ? STATIC : implicit;
             } else if (sym.owner.kind == TYP) {
                 // statics in inner classes are allowed only if records are allowed too
@@ -1433,12 +1309,20 @@ public class Check {
             } else {
                 mask = ExtendedClassFlags;
             }
+            if ((flags & (VALUE_CLASS | SEALED | ABSTRACT)) == (VALUE_CLASS | SEALED) ||
+                (flags & (VALUE_CLASS | NON_SEALED | ABSTRACT)) == (VALUE_CLASS | NON_SEALED)) {
+                log.error(pos, Errors.NonAbstractValueClassCantBeSealedOrNonSealed);
+            }
             // Interfaces are always ABSTRACT
             if ((flags & INTERFACE) != 0) implicit |= ABSTRACT;
 
+            if ((flags & (INTERFACE | VALUE_CLASS)) == 0) {
+                implicit |= IDENTITY_TYPE;
+            }
+
             if ((flags & ENUM) != 0) {
-                // enums can't be declared abstract, final, sealed or non-sealed or primitive
-                mask &= ~(ABSTRACT | FINAL | SEALED | NON_SEALED | PRIMITIVE_CLASS);
+                // enums can't be declared abstract, final, sealed or non-sealed or value
+                mask &= ~(ABSTRACT | FINAL | SEALED | NON_SEALED | VALUE_CLASS);
                 implicit |= implicitEnumFinalFlag(tree);
             }
             if ((flags & RECORD) != 0) {
@@ -1447,10 +1331,15 @@ public class Check {
                 implicit |= FINAL;
             }
             if ((flags & STRICTFP) != 0) {
-                warnOnExplicitStrictfp(pos);
+                warnOnExplicitStrictfp(tree);
             }
             // Imply STRICTFP if owner has STRICTFP set.
             implicit |= sym.owner.flags_field & STRICTFP;
+
+            // concrete value classes are implicitly final
+            if ((flags & (ABSTRACT | INTERFACE | VALUE_CLASS)) == VALUE_CLASS) {
+                implicit |= FINAL;
+            }
             break;
         default:
             throw new AssertionError();
@@ -1465,8 +1354,7 @@ public class Check {
                 log.error(pos,
                         Errors.ModNotAllowedHere(asFlagSet(illegal)));
             }
-        }
-        else if ((sym.kind == TYP ||
+        } else if ((sym.kind == TYP ||
                   // ISSUE: Disallowing abstract&private is no longer appropriate
                   // in the presence of inner classes. Should it be deleted here?
                   checkDisjoint(pos, flags,
@@ -1479,7 +1367,7 @@ public class Check {
                  &&
                  checkDisjoint(pos, flags,
                                ABSTRACT | INTERFACE,
-                               FINAL | NATIVE | SYNCHRONIZED | PRIMITIVE_CLASS)
+                               FINAL | NATIVE | SYNCHRONIZED)
                  &&
                  checkDisjoint(pos, flags,
                                PUBLIC,
@@ -1489,7 +1377,8 @@ public class Check {
                                PRIVATE,
                                PUBLIC | PROTECTED)
                  &&
-                 checkDisjoint(pos, (flags | implicit), // complain against volatile & implcitly final entities too.
+                 // we are using `implicit` here as instance fields of value classes are implicitly final
+                 checkDisjoint(pos, flags | implicit,
                                FINAL,
                                VOLATILE)
                  &&
@@ -1505,22 +1394,24 @@ public class Check {
                            FINAL | NON_SEALED)
                  && checkDisjoint(pos, flags,
                                 SEALED,
-                                ANNOTATION)) {
+                                ANNOTATION)
+                && checkDisjoint(pos, flags,
+                                VALUE_CLASS,
+                                ANNOTATION)
+                && checkDisjoint(pos, flags,
+                                VALUE_CLASS,
+                                INTERFACE) ) {
             // skip
         }
         return flags & (mask | ~ExtendedStandardFlags) | implicit;
     }
 
-    private void warnOnExplicitStrictfp(DiagnosticPosition pos) {
-        DiagnosticPosition prevLintPos = deferredLintHandler.setPos(pos);
+    private void warnOnExplicitStrictfp(JCTree tree) {
+        deferredLintHandler.push(tree);
         try {
-            deferredLintHandler.report(() -> {
-                                           if (lint.isEnabled(LintCategory.STRICTFP)) {
-                                               log.warning(LintCategory.STRICTFP,
-                                                           pos, Warnings.Strictfp); }
-                                       });
+            deferredLintHandler.report(_l -> lint.logIfEnabled(tree.pos(), LintWarnings.Strictfp));
         } finally {
-            deferredLintHandler.setPos(prevLintPos);
+            deferredLintHandler.pop();
         }
     }
 
@@ -1678,16 +1569,10 @@ public class Check {
 
         public void visitSelectInternal(JCFieldAccess tree) {
             if (tree.type.tsym.isStatic() &&
-                tree.selected.type.isParameterized() &&
-                    (!tree.type.tsym.isPrimitiveClass() || (tree.name != names.ref && tree.name != names.val))) {
+                tree.selected.type.isParameterized()) {
                 // The enclosing type is not a class, so we are
                 // looking at a static member type.  However, the
                 // qualifying expression is parameterized.
-
-                // Tolerate the pseudo-select V.ref/V.val: V<T>.ref/val will be static if V<T> is and
-                // should not be confused as selecting a static member of a parameterized type. Both
-                // these constructs are illegal anyway & will be more appropriately complained against shortly.
-                // Note: the canonicl form is V.ref<T> and V.val<T> not V<T>.ref and V<T>.val
                 log.error(tree.pos(), Errors.CantSelectStaticClassFromParamType);
             } else {
                 // otherwise validate the rest of the expression
@@ -1739,13 +1624,11 @@ public class Check {
     }
 
     void checkRaw(JCTree tree, Env<AttrContext> env) {
-        if (lint.isEnabled(LintCategory.RAW) &&
-            tree.type.hasTag(CLASS) &&
+        if (tree.type.hasTag(CLASS) &&
             !TreeInfo.isDiamond(tree) &&
             !withinAnonConstr(env) &&
             tree.type.isRaw()) {
-            log.warning(LintCategory.RAW,
-                    tree.pos(), Warnings.RawClassUse(tree.type, tree.type.tsym.type));
+            lint.logIfEnabled(tree.pos(), LintWarnings.RawClassUse(tree.type, tree.type.tsym.type));
         }
     }
     //where
@@ -1976,7 +1859,7 @@ public class Check {
             return;
         }
 
-        // Error if static method overrides instance method (JLS 8.4.6.2).
+        // Error if static method overrides instance method (JLS 8.4.8.2).
         if ((m.flags() & STATIC) != 0 &&
                    (other.flags() & STATIC) == 0) {
             log.error(TreeInfo.diagnosticPositionFor(m, tree),
@@ -1986,7 +1869,7 @@ public class Check {
         }
 
         // Error if instance method overrides static or final
-        // method (JLS 8.4.6.1).
+        // method (JLS 8.4.8.1).
         if ((other.flags() & FINAL) != 0 ||
                  (m.flags() & STATIC) == 0 &&
                  (other.flags() & STATIC) != 0) {
@@ -2002,7 +1885,7 @@ public class Check {
             return;
         }
 
-        // Error if overriding method has weaker access (JLS 8.4.6.3).
+        // Error if overriding method has weaker access (JLS 8.4.8.3).
         if (protection(m.flags()) > protection(other.flags())) {
             log.error(TreeInfo.diagnosticPositionFor(m, tree),
                       (other.flags() & AccessFlags) == 0 ?
@@ -2014,13 +1897,9 @@ public class Check {
             return;
         }
 
-        if (origin.isPrimitiveClass() && other.owner == syms.objectType.tsym && m.type.getParameterTypes().size() == 0) {
-            if (m.name == names.clone || m.name == names.finalize) {
-                log.error(TreeInfo.diagnosticPositionFor(m, tree),
-                        Errors.PrimitiveClassMayNotOverride(m.name));
-                m.flags_field |= BAD_OVERRIDE;
-                return;
-            }
+        if (shouldCheckPreview(m, other, origin)) {
+            checkPreview(TreeInfo.diagnosticPositionFor(m, tree),
+                         m, origin.type, other);
         }
 
         Type mt = types.memberType(origin.type, m);
@@ -2051,7 +1930,7 @@ public class Check {
             return;
         } else if (overrideWarner.hasNonSilentLint(LintCategory.UNCHECKED)) {
             warnUnchecked(TreeInfo.diagnosticPositionFor(m, tree),
-                    Warnings.OverrideUncheckedRet(uncheckedOverrides(m, other), mtres, otres));
+                    LintWarnings.OverrideUncheckedRet(uncheckedOverrides(m, other), mtres, otres));
         }
 
         // Error if overriding method throws an exception not reported
@@ -2067,17 +1946,16 @@ public class Check {
         }
         else if (unhandledUnerased.nonEmpty()) {
             warnUnchecked(TreeInfo.diagnosticPositionFor(m, tree),
-                          Warnings.OverrideUncheckedThrown(cannotOverride(m, other), unhandledUnerased.head));
+                          LintWarnings.OverrideUncheckedThrown(cannotOverride(m, other), unhandledUnerased.head));
             return;
         }
 
         // Optional warning if varargs don't agree
-        if ((((m.flags() ^ other.flags()) & Flags.VARARGS) != 0)
-            && lint.isEnabled(LintCategory.OVERRIDES)) {
-            log.warning(TreeInfo.diagnosticPositionFor(m, tree),
+        if ((((m.flags() ^ other.flags()) & Flags.VARARGS) != 0)) {
+            lint.logIfEnabled(TreeInfo.diagnosticPositionFor(m, tree),
                         ((m.flags() & Flags.VARARGS) != 0)
-                        ? Warnings.OverrideVarargsMissing(varargsOverrides(m, other))
-                        : Warnings.OverrideVarargsExtra(varargsOverrides(m, other)));
+                        ? LintWarnings.OverrideVarargsMissing(varargsOverrides(m, other))
+                        : LintWarnings.OverrideVarargsExtra(varargsOverrides(m, other)));
         }
 
         // Warn if instance method overrides bridge method (compiler spec ??)
@@ -2097,6 +1975,24 @@ public class Check {
         }
     }
     // where
+        private boolean shouldCheckPreview(MethodSymbol m, MethodSymbol other, ClassSymbol origin) {
+            if (m.owner != origin ||
+                //performance - only do the expensive checks when the overridden method is a Preview API:
+                ((other.flags() & PREVIEW_API) == 0 &&
+                 (other.owner.flags() & PREVIEW_API) == 0)) {
+                return false;
+            }
+
+            for (Symbol s : types.membersClosure(origin.type, false).getSymbolsByName(m.name)) {
+                if (m != s && m.overrides(s, origin, types, false)) {
+                    //only produce preview warnings or errors if "m" immediatelly overrides "other"
+                    //without intermediate overriding methods:
+                    return s == other;
+                }
+            }
+
+            return false;
+        }
         private boolean isDeprecatedOverrideIgnorable(MethodSymbol m, ClassSymbol origin) {
             // If the method, m, is defined in an interface, then ignore the issue if the method
             // is only inherited via a supertype and also implemented in the supertype,
@@ -2262,8 +2158,13 @@ public class Check {
                          types.covariantReturnType(rt2, rt1, types.noWarnings)) ||
                          checkCommonOverriderIn(s1,s2,site);
                     if (!compat) {
-                        log.error(pos, Errors.TypesIncompatible(t1, t2,
-                                Fragments.IncompatibleDiffRet(s2.name, types.memberType(t2, s2).getParameterTypes())));
+                        if (types.isSameType(t1, t2)) {
+                            log.error(pos, Errors.IncompatibleDiffRetSameType(t1,
+                                    s2.name, types.memberType(t2, s2).getParameterTypes()));
+                        } else {
+                            log.error(pos, Errors.TypesIncompatible(t1, t2,
+                                    Fragments.IncompatibleDiffRet(s2.name, types.memberType(t2, s2).getParameterTypes())));
+                        }
                         return s2;
                     }
                 } else if (checkNameClash((ClassSymbol)site.tsym, s1, s2) &&
@@ -2311,6 +2212,11 @@ public class Check {
                 return;
             }
         }
+        if (allowValueClasses && origin.isValueClass() && names.finalize.equals(m.name)) {
+            if (m.overrides(syms.objectFinalize, origin, types, false)) {
+                log.warning(tree.pos(), Warnings.ValueFinalize);
+            }
+        }
         if (allowRecords && origin.isRecord()) {
             // let's find out if this is a user defined accessor in which case the @Override annotation is acceptable
             Optional<? extends RecordComponent> recordComponent = origin.getRecordComponents().stream()
@@ -2335,8 +2241,7 @@ public class Check {
         // or by virtue of being a member of a diamond inferred anonymous class. Latter case is to
         // be treated "as if as they were annotated" with @Override.
         boolean mustOverride = explicitOverride ||
-                (env.info.isAnonymousDiamond && !m.isConstructor() && !m.isPrivate() &&
-                        (!m.owner.isPrimitiveClass() || (tree.body.flags & SYNTHETIC) == 0));
+                (env.info.isAnonymousDiamond && !m.isConstructor() && !m.isPrivate());
         if (mustOverride && !isOverrider(m)) {
             DiagnosticPosition pos = tree.pos();
             for (JCAnnotation a : tree.getModifiers().annotations) {
@@ -2399,9 +2304,39 @@ public class Check {
                 someClass, false, equalsHasCodeFilter) != hashCodeAtObject;
 
             if (overridesEquals && !overridesHashCode) {
-                log.warning(LintCategory.OVERRIDES, pos,
-                            Warnings.OverrideEqualsButNotHashcode(someClass));
+                log.warning(pos,
+                            LintWarnings.OverrideEqualsButNotHashcode(someClass));
             }
+        }
+    }
+
+    public void checkHasMain(DiagnosticPosition pos, ClassSymbol c) {
+        boolean found = false;
+
+        for (Symbol sym : c.members().getSymbolsByName(names.main)) {
+            if (sym.kind == MTH && (sym.flags() & PRIVATE) == 0) {
+                MethodSymbol meth = (MethodSymbol)sym;
+                if (!types.isSameType(meth.getReturnType(), syms.voidType)) {
+                    continue;
+                }
+                if (meth.params.isEmpty()) {
+                    found = true;
+                    break;
+                }
+                if (meth.params.size() != 1) {
+                    continue;
+                }
+                if (!types.isSameType(meth.params.head.type, types.makeArrayType(syms.stringType))) {
+                    continue;
+                }
+
+                found = true;
+                break;
+            }
+        }
+
+        if (!found) {
+            log.error(pos, Errors.ImplicitClassDoesNotHaveMainMethod);
         }
     }
 
@@ -2432,7 +2367,7 @@ public class Check {
                     String moduleNameComponentString = componentName.toString();
                     int nameLength = moduleNameComponentString.length();
                     if (nameLength > 0 && Character.isDigit(moduleNameComponentString.charAt(nameLength - 1))) {
-                        log.warning(Lint.LintCategory.MODULE, pos, Warnings.PoorChoiceForModuleName(componentName));
+                        log.warning(pos, LintWarnings.PoorChoiceForModuleName(componentName));
                     }
                 }
             }
@@ -2461,44 +2396,6 @@ public class Check {
                       Errors.DoesNotOverrideAbstract(c, undef1, undef1.location()));
         }
     }
-
-    // A primitive class cannot contain a field of its own type either or indirectly.
-    void checkNonCyclicMembership(JCClassDecl tree) {
-        Assert.check((tree.sym.flags_field & LOCKED) == 0);
-        try {
-            tree.sym.flags_field |= LOCKED;
-            for (List<? extends JCTree> l = tree.defs; l.nonEmpty(); l = l.tail) {
-                if (l.head.hasTag(VARDEF)) {
-                    JCVariableDecl field = (JCVariableDecl) l.head;
-                    if (cyclePossible(field.sym)) {
-                        checkNonCyclicMembership((ClassSymbol) field.type.tsym, field.pos());
-                    }
-                }
-            }
-        } finally {
-            tree.sym.flags_field &= ~LOCKED;
-        }
-
-    }
-    // where
-    private void checkNonCyclicMembership(ClassSymbol c, DiagnosticPosition pos) {
-        if ((c.flags_field & LOCKED) != 0) {
-            log.error(pos, Errors.CyclicPrimitiveClassMembership(c));
-            return;
-        }
-        try {
-            c.flags_field |= LOCKED;
-            for (Symbol fld : c.members().getSymbols(s -> s.kind == VAR && cyclePossible((VarSymbol) s), NON_RECURSIVE)) {
-                checkNonCyclicMembership((ClassSymbol) fld.type.tsym, pos);
-            }
-        } finally {
-            c.flags_field &= ~LOCKED;
-        }
-    }
-        // where
-        private boolean cyclePossible(VarSymbol symbol) {
-            return (symbol.flags() & STATIC) == 0 && types.isPrimitiveClass(symbol.type);
-        }
 
     void checkNonCyclicDecl(JCClassDecl tree) {
         CycleChecker cc = new CycleChecker();
@@ -2575,7 +2472,12 @@ public class Check {
                 return;
             if (seenClasses.contains(c)) {
                 errorFound = true;
-                noteCyclic(pos, (ClassSymbol)c);
+                log.error(pos, Errors.CyclicInheritance(c));
+                seenClasses.stream()
+                  .filter(s -> !s.type.isErroneous())
+                  .filter(ClassSymbol.class::isInstance)
+                  .map(ClassSymbol.class::cast)
+                  .forEach(Check.this::handleCyclic);
             } else if (!c.type.isErroneous()) {
                 try {
                     seenClasses.add(c);
@@ -2643,7 +2545,7 @@ public class Check {
      *
      *  @param pos      Position to be used for error reporting.
      *  @param t        The type referred to.
-     *  @returns        True if the check completed on all attributed classes
+     *  @return        True if the check completed on all attributed classes
      */
     private boolean checkNonCyclicInternal(DiagnosticPosition pos, Type t) {
         boolean complete = true; // was the check complete?
@@ -2652,7 +2554,8 @@ public class Check {
         if ((c.flags_field & ACYCLIC) != 0) return true;
 
         if ((c.flags_field & LOCKED) != 0) {
-            noteCyclic(pos, (ClassSymbol)c);
+            log.error(pos, Errors.CyclicInheritance(c));
+            handleCyclic((ClassSymbol)c);
         } else if (!c.type.isErroneous()) {
             try {
                 c.flags_field |= LOCKED;
@@ -2679,9 +2582,10 @@ public class Check {
         return complete;
     }
 
-    /** Note that we found an inheritance cycle. */
-    private void noteCyclic(DiagnosticPosition pos, ClassSymbol c) {
-        log.error(pos, Errors.CyclicInheritance(c));
+    /** Handle finding an inheritance cycle on a class by setting
+     *  the class' and its supertypes' types to the error type.
+     **/
+    private void handleCyclic(ClassSymbol c) {
         for (List<Type> l=types.interfaces(c.type); l.nonEmpty(); l=l.tail)
             l.head = types.createErrorType((ClassSymbol)l.head.tsym, Type.noType);
         Type st = types.supertype(c.type);
@@ -2749,14 +2653,16 @@ public class Check {
         }
         checkCompatibleConcretes(pos, c);
 
-        boolean implementsIdentityObject = types.asSuper(c.referenceProjectionOrSelf(), syms.identityObjectType.tsym) != null;
-        boolean implementsPrimitiveObject = types.asSuper(c.referenceProjectionOrSelf(), syms.primitiveObjectType.tsym) != null;
-        if (c.tsym.isPrimitiveClass() && implementsIdentityObject) {
-            log.error(pos, Errors.PrimitiveClassMustNotImplementIdentityObject(c));
-        } else if (implementsPrimitiveObject && !c.tsym.isPrimitiveClass() && !c.isReferenceProjection() && !c.tsym.isInterface() && !c.tsym.isAbstract()) {
-            log.error(pos, Errors.IdentityClassMustNotImplementPrimitiveObject(c));
-        } else if (implementsPrimitiveObject && implementsIdentityObject) {
-            log.error(pos, Errors.MutuallyIncompatibleSuperInterfaces(c));
+        Type identitySuper = null;
+        for (Type t : types.closure(c)) {
+            if (t != c) {
+                if (t.isIdentityClass() && (t.tsym.flags() & VALUE_BASED) == 0)
+                    identitySuper = t;
+                if (c.isValueClass() && identitySuper != null && identitySuper.tsym != syms.objectType.tsym) { // Object is special
+                    log.error(pos, Errors.ValueTypeHasIdentitySuperType(c, identitySuper));
+                    break;
+                }
+            }
         }
     }
 
@@ -2772,25 +2678,11 @@ public class Check {
         //for each method m1 that is overridden (directly or indirectly)
         //by method 'sym' in 'site'...
 
-        List<MethodSymbol> potentiallyAmbiguousList = List.nil();
-        boolean overridesAny = false;
         ArrayList<Symbol> symbolsByName = new ArrayList<>();
         types.membersClosure(site, false).getSymbolsByName(sym.name, cf).forEach(symbolsByName::add);
         for (Symbol m1 : symbolsByName) {
             if (!sym.overrides(m1, site.tsym, types, false)) {
-                if (m1 == sym) {
-                    continue;
-                }
-
-                if (!overridesAny) {
-                    potentiallyAmbiguousList = potentiallyAmbiguousList.prepend((MethodSymbol)m1);
-                }
                 continue;
-            }
-
-            if (m1 != sym) {
-                overridesAny = true;
-                potentiallyAmbiguousList = List.nil();
             }
 
             //...check each method m2 that is a member of 'site'
@@ -2798,7 +2690,7 @@ public class Check {
                 if (m2 == m1) continue;
                 //if (i) the signature of 'sym' is not a subsignature of m1 (seen as
                 //a member of 'site') and (ii) m1 has the same erasure as m2, issue an error
-                if (!types.isSubSignature(sym.type, types.memberType(site, m2), Feature.STRICT_METHOD_CLASH_CHECK.allowedInSource(source)) &&
+                if (!types.isSubSignature(sym.type, types.memberType(site, m2)) &&
                         types.hasSameArgs(m2.erasure(types), m1.erasure(types))) {
                     sym.flags_field |= CLASH;
                     if (m1 == sym) {
@@ -2822,12 +2714,6 @@ public class Check {
                 }
             }
         }
-
-        if (!overridesAny) {
-            for (MethodSymbol m: potentiallyAmbiguousList) {
-                checkPotentiallyAmbiguousOverloads(pos, site, sym, m);
-            }
-        }
     }
 
     /** Check that all static methods accessible from 'site' are
@@ -2843,13 +2729,11 @@ public class Check {
         for (Symbol s : types.membersClosure(site, true).getSymbolsByName(sym.name, cf)) {
             //if (i) the signature of 'sym' is not a subsignature of m1 (seen as
             //a member of 'site') and (ii) 'sym' has the same erasure as m1, issue an error
-            if (!types.isSubSignature(sym.type, types.memberType(site, s), Feature.STRICT_METHOD_CLASH_CHECK.allowedInSource(source))) {
+            if (!types.isSubSignature(sym.type, types.memberType(site, s))) {
                 if (types.hasSameArgs(s.erasure(types), sym.erasure(types))) {
                     log.error(pos,
                               Errors.NameClashSameErasureNoHide(sym, sym.location(), s, s.location()));
                     return;
-                } else {
-                    checkPotentiallyAmbiguousOverloads(pos, site, sym, (MethodSymbol)s);
                 }
             }
          }
@@ -2938,67 +2822,252 @@ public class Check {
          }
      }
 
-    /**
-      * Report warnings for potentially ambiguous method declarations. Two declarations
-      * are potentially ambiguous if they feature two unrelated functional interface
-      * in same argument position (in which case, a call site passing an implicit
-      * lambda would be ambiguous).
-      */
-    void checkPotentiallyAmbiguousOverloads(DiagnosticPosition pos, Type site,
-            MethodSymbol msym1, MethodSymbol msym2) {
-        if (msym1 != msym2 &&
-                Feature.DEFAULT_METHODS.allowedInSource(source) &&
-                lint.isEnabled(LintCategory.OVERLOADS) &&
-                (msym1.flags() & POTENTIALLY_AMBIGUOUS) == 0 &&
-                (msym2.flags() & POTENTIALLY_AMBIGUOUS) == 0) {
-            Type mt1 = types.memberType(site, msym1);
-            Type mt2 = types.memberType(site, msym2);
-            //if both generic methods, adjust type variables
-            if (mt1.hasTag(FORALL) && mt2.hasTag(FORALL) &&
-                    types.hasSameBounds((ForAll)mt1, (ForAll)mt2)) {
-                mt2 = types.subst(mt2, ((ForAll)mt2).tvars, ((ForAll)mt1).tvars);
+    /** Report warnings for potentially ambiguous method declarations in the given site. */
+    void checkPotentiallyAmbiguousOverloads(JCClassDecl tree, Type site) {
+
+        // Skip if warning not enabled
+        if (!lint.isEnabled(LintCategory.OVERLOADS))
+            return;
+
+        // Gather all of site's methods, including overridden methods, grouped by name (except Object methods)
+        List<java.util.List<MethodSymbol>> methodGroups = methodsGroupedByName(site,
+            new PotentiallyAmbiguousFilter(site), ArrayList::new);
+
+        // Build the predicate that determines if site is responsible for an ambiguity
+        BiPredicate<MethodSymbol, MethodSymbol> responsible = buildResponsiblePredicate(site, methodGroups);
+
+        // Now remove overridden methods from each group, leaving only site's actual members
+        methodGroups.forEach(list -> removePreempted(list, (m1, m2) -> m1.overrides(m2, site.tsym, types, false)));
+
+        // Allow site's own declared methods (only) to apply @SuppressWarnings("overloads")
+        methodGroups.forEach(list -> list.removeIf(
+            m -> m.owner == site.tsym && !lint.augment(m).isEnabled(LintCategory.OVERLOADS)));
+
+        // Warn about ambiguous overload method pairs for which site is responsible
+        methodGroups.forEach(list -> compareAndRemove(list, (m1, m2) -> {
+
+            // See if this is an ambiguous overload for which "site" is responsible
+            if (!potentiallyAmbiguousOverload(site, m1, m2) || !responsible.test(m1, m2))
+                return 0;
+
+            // Locate the warning at one of the methods, if possible
+            DiagnosticPosition pos =
+                m1.owner == site.tsym ? TreeInfo.diagnosticPositionFor(m1, tree) :
+                m2.owner == site.tsym ? TreeInfo.diagnosticPositionFor(m2, tree) :
+                tree.pos();
+
+            // Log the warning
+            log.warning(pos,
+                LintWarnings.PotentiallyAmbiguousOverload(
+                    m1.asMemberOf(site, types), m1.location(),
+                    m2.asMemberOf(site, types), m2.location()));
+
+            // Don't warn again for either of these two methods
+            return FIRST | SECOND;
+        }));
+    }
+
+    /** Build a predicate that determines, given two methods that are members of the given class,
+     *  whether the class should be held "responsible" if the methods are potentially ambiguous.
+     *
+     *  Sometimes ambiguous methods are unavoidable because they're inherited from a supertype.
+     *  For example, any subtype of Spliterator.OfInt will have ambiguities for both
+     *  forEachRemaining() and tryAdvance() (in both cases the overloads are IntConsumer and
+     *  Consumer&lt;? super Integer&gt;). So we only want to "blame" a class when that class is
+     *  itself responsible for creating the ambiguity. We declare that a class C is "responsible"
+     *  for the ambiguity between two methods m1 and m2 if there is no direct supertype T of C
+     *  such that m1 and m2, or some overrides thereof, both exist in T and are ambiguous in T.
+     *  As an optimization, we first check if either method is declared in C and does not override
+     *  any other methods; in this case the class is definitely responsible.
+     */
+    BiPredicate<MethodSymbol, MethodSymbol> buildResponsiblePredicate(Type site,
+        List<? extends Collection<MethodSymbol>> methodGroups) {
+
+        // Define the "overrides" predicate
+        BiPredicate<MethodSymbol, MethodSymbol> overrides = (m1, m2) -> m1.overrides(m2, site.tsym, types, false);
+
+        // Map each method declared in site to a list of the supertype method(s) it directly overrides
+        HashMap<MethodSymbol, ArrayList<MethodSymbol>> overriddenMethodsMap = new HashMap<>();
+        methodGroups.forEach(list -> {
+            for (MethodSymbol m : list) {
+
+                // Skip methods not declared in site
+                if (m.owner != site.tsym)
+                    continue;
+
+                // Gather all supertype methods overridden by m, directly or indirectly
+                ArrayList<MethodSymbol> overriddenMethods = list.stream()
+                  .filter(m2 -> m2 != m && overrides.test(m, m2))
+                  .collect(Collectors.toCollection(ArrayList::new));
+
+                // Eliminate non-direct overrides
+                removePreempted(overriddenMethods, overrides);
+
+                // Add to map
+                overriddenMethodsMap.put(m, overriddenMethods);
             }
-            //expand varargs methods if needed
-            int maxLength = Math.max(mt1.getParameterTypes().length(), mt2.getParameterTypes().length());
-            List<Type> args1 = rs.adjustArgs(mt1.getParameterTypes(), msym1, maxLength, true);
-            List<Type> args2 = rs.adjustArgs(mt2.getParameterTypes(), msym2, maxLength, true);
-            //if arities don't match, exit
-            if (args1.length() != args2.length()) return;
-            boolean potentiallyAmbiguous = false;
-            while (args1.nonEmpty() && args2.nonEmpty()) {
-                Type s = args1.head;
-                Type t = args2.head;
-                if (!types.isSubtype(t, s) && !types.isSubtype(s, t)) {
-                    if (types.isFunctionalInterface(s) && types.isFunctionalInterface(t) &&
-                            types.findDescriptorType(s).getParameterTypes().length() > 0 &&
-                            types.findDescriptorType(s).getParameterTypes().length() ==
-                            types.findDescriptorType(t).getParameterTypes().length()) {
-                        potentiallyAmbiguous = true;
-                    } else {
-                        return;
+        });
+
+        // Build the predicate
+        return (m1, m2) -> {
+
+            // Get corresponding supertype methods (if declared in site)
+            java.util.List<MethodSymbol> overriddenMethods1 = overriddenMethodsMap.get(m1);
+            java.util.List<MethodSymbol> overriddenMethods2 = overriddenMethodsMap.get(m2);
+
+            // Quick check for the case where a method was added by site itself
+            if (overriddenMethods1 != null && overriddenMethods1.isEmpty())
+                return true;
+            if (overriddenMethods2 != null && overriddenMethods2.isEmpty())
+                return true;
+
+            // Get each method's corresponding method(s) from supertypes of site
+            java.util.List<MethodSymbol> supertypeMethods1 = overriddenMethods1 != null ?
+              overriddenMethods1 : Collections.singletonList(m1);
+            java.util.List<MethodSymbol> supertypeMethods2 = overriddenMethods2 != null ?
+              overriddenMethods2 : Collections.singletonList(m2);
+
+            // See if we can blame some direct supertype instead
+            return types.directSupertypes(site).stream()
+              .filter(stype -> stype != syms.objectType)
+              .map(stype -> stype.tsym.type)                // view supertype in its original form
+              .noneMatch(stype -> {
+                for (MethodSymbol sm1 : supertypeMethods1) {
+                    if (!types.isSubtype(types.erasure(stype), types.erasure(sm1.owner.type)))
+                        continue;
+                    for (MethodSymbol sm2 : supertypeMethods2) {
+                        if (!types.isSubtype(types.erasure(stype), types.erasure(sm2.owner.type)))
+                            continue;
+                        if (potentiallyAmbiguousOverload(stype, sm1, sm2))
+                            return true;
                     }
                 }
-                args1 = args1.tail;
-                args2 = args2.tail;
-            }
-            if (potentiallyAmbiguous) {
-                //we found two incompatible functional interfaces with same arity
-                //this means a call site passing an implicit lambda would be ambiguous
-                msym1.flags_field |= POTENTIALLY_AMBIGUOUS;
-                msym2.flags_field |= POTENTIALLY_AMBIGUOUS;
-                log.warning(LintCategory.OVERLOADS, pos,
-                            Warnings.PotentiallyAmbiguousOverload(msym1, msym1.location(),
-                                                                  msym2, msym2.location()));
-                return;
+                return false;
+            });
+        };
+    }
+
+    /** Gather all of site's methods, including overridden methods, grouped and sorted by name,
+     *  after applying the given filter.
+     */
+    <C extends Collection<MethodSymbol>> List<C> methodsGroupedByName(Type site,
+            Predicate<Symbol> filter, Supplier<? extends C> groupMaker) {
+        Iterable<Symbol> symbols = types.membersClosure(site, false).getSymbols(filter, RECURSIVE);
+        return StreamSupport.stream(symbols.spliterator(), false)
+          .map(MethodSymbol.class::cast)
+          .collect(Collectors.groupingBy(m -> m.name, Collectors.toCollection(groupMaker)))
+          .entrySet()
+          .stream()
+          .sorted(Comparator.comparing(e -> e.getKey().toString()))
+          .map(Map.Entry::getValue)
+          .collect(List.collector());
+    }
+
+    /** Compare elements in a list pair-wise in order to remove some of them.
+     *  @param list mutable list of items
+     *  @param comparer returns flag bit(s) to remove FIRST and/or SECOND
+     */
+    <T> void compareAndRemove(java.util.List<T> list, ToIntBiFunction<? super T, ? super T> comparer) {
+        for (int index1 = 0; index1 < list.size() - 1; index1++) {
+            T item1 = list.get(index1);
+            for (int index2 = index1 + 1; index2 < list.size(); index2++) {
+                T item2 = list.get(index2);
+                int flags = comparer.applyAsInt(item1, item2);
+                if ((flags & SECOND) != 0)
+                    list.remove(index2--);          // remove item2
+                if ((flags & FIRST) != 0) {
+                    list.remove(index1--);          // remove item1
+                    break;
+                }
             }
         }
     }
 
+    /** Remove elements in a list that are preempted by some other element in the list.
+     *  @param list mutable list of items
+     *  @param preempts decides if one item preempts another, causing the second one to be removed
+     */
+    <T> void removePreempted(java.util.List<T> list, BiPredicate<? super T, ? super T> preempts) {
+        compareAndRemove(list, (item1, item2) -> {
+            int flags = 0;
+            if (preempts.test(item1, item2))
+                flags |= SECOND;
+            if (preempts.test(item2, item1))
+                flags |= FIRST;
+            return flags;
+        });
+    }
+
+    /** Filters method candidates for the "potentially ambiguous method" check */
+    class PotentiallyAmbiguousFilter extends ClashFilter {
+
+        PotentiallyAmbiguousFilter(Type site) {
+            super(site);
+        }
+
+        @Override
+        boolean shouldSkip(Symbol s) {
+            return s.owner.type.tsym == syms.objectType.tsym || super.shouldSkip(s);
+        }
+    }
+
+    /**
+      * Report warnings for potentially ambiguous method declarations. Two declarations
+      * are potentially ambiguous if they feature two unrelated functional interface
+      * in same argument position (in which case, a call site passing an implicit
+      * lambda would be ambiguous). This assumes they already have the same name.
+      */
+    boolean potentiallyAmbiguousOverload(Type site, MethodSymbol msym1, MethodSymbol msym2) {
+        Assert.check(msym1.name == msym2.name);
+        if (msym1 == msym2)
+            return false;
+        Type mt1 = types.memberType(site, msym1);
+        Type mt2 = types.memberType(site, msym2);
+        //if both generic methods, adjust type variables
+        if (mt1.hasTag(FORALL) && mt2.hasTag(FORALL) &&
+                types.hasSameBounds((ForAll)mt1, (ForAll)mt2)) {
+            mt2 = types.subst(mt2, ((ForAll)mt2).tvars, ((ForAll)mt1).tvars);
+        }
+        //expand varargs methods if needed
+        int maxLength = Math.max(mt1.getParameterTypes().length(), mt2.getParameterTypes().length());
+        List<Type> args1 = rs.adjustArgs(mt1.getParameterTypes(), msym1, maxLength, true);
+        List<Type> args2 = rs.adjustArgs(mt2.getParameterTypes(), msym2, maxLength, true);
+        //if arities don't match, exit
+        if (args1.length() != args2.length())
+            return false;
+        boolean potentiallyAmbiguous = false;
+        while (args1.nonEmpty() && args2.nonEmpty()) {
+            Type s = args1.head;
+            Type t = args2.head;
+            if (!types.isSubtype(t, s) && !types.isSubtype(s, t)) {
+                if (types.isFunctionalInterface(s) && types.isFunctionalInterface(t) &&
+                        types.findDescriptorType(s).getParameterTypes().length() > 0 &&
+                        types.findDescriptorType(s).getParameterTypes().length() ==
+                        types.findDescriptorType(t).getParameterTypes().length()) {
+                    potentiallyAmbiguous = true;
+                } else {
+                    return false;
+                }
+            }
+            args1 = args1.tail;
+            args2 = args2.tail;
+        }
+        return potentiallyAmbiguous;
+    }
+
+    // Apply special flag "-XDwarnOnAccessToMembers" which turns on just this particular warning for all types of access
     void checkAccessFromSerializableElement(final JCTree tree, boolean isLambda) {
-        if (warnOnAnyAccessToMembers ||
-            (lint.isEnabled(LintCategory.SERIAL) &&
-            !lint.isSuppressed(LintCategory.SERIAL) &&
-            isLambda)) {
+        final Lint prevLint = setLint(warnOnAnyAccessToMembers ? lint.enable(LintCategory.SERIAL) : lint);
+        try {
+            if (warnOnAnyAccessToMembers || isLambda)
+                checkAccessFromSerializableElementInner(tree, isLambda);
+        } finally {
+            setLint(prevLint);
+        }
+    }
+
+    private void checkAccessFromSerializableElementInner(final JCTree tree, boolean isLambda) {
+        if (lint.isEnabled(LintCategory.SERIAL)) {
             Symbol sym = TreeInfo.symbol(tree);
             if (!sym.kind.matches(KindSelector.VAL_MTH)) {
                 return;
@@ -3017,12 +3086,12 @@ public class Check {
                 isEffectivelyNonPublic(sym)) {
                 if (isLambda) {
                     if (belongsToRestrictedPackage(sym)) {
-                        log.warning(LintCategory.SERIAL, tree.pos(),
-                                    Warnings.AccessToMemberFromSerializableLambda(sym));
+                        log.warning(tree.pos(),
+                                    LintWarnings.AccessToMemberFromSerializableLambda(sym));
                     }
                 } else {
                     log.warning(tree.pos(),
-                                Warnings.AccessToMemberFromSerializableElement(sym));
+                                LintWarnings.AccessToMemberFromSerializableElement(sym));
                 }
             }
         }
@@ -3091,11 +3160,11 @@ public class Check {
     /** Enter interface into into set.
      *  If it existed already, issue a "repeated interface" error.
      */
-    void checkNotRepeated(DiagnosticPosition pos, Type it, Set<Type> its) {
-        if (its.contains(it))
+    void checkNotRepeated(DiagnosticPosition pos, Type it, Set<Symbol> its) {
+        if (its.contains(it.tsym))
             log.error(pos, Errors.RepeatedInterface);
         else {
-            its.add(it);
+            its.add(it.tsym);
         }
     }
 
@@ -3175,14 +3244,17 @@ public class Check {
 
     /** Check the type annotations.
      */
-    public void validateTypeAnnotations(List<JCAnnotation> annotations, boolean isTypeParameter) {
+    public void validateTypeAnnotations(List<JCAnnotation> annotations, Symbol s, boolean isTypeParameter) {
         for (JCAnnotation a : annotations)
-            validateTypeAnnotation(a, isTypeParameter);
+            validateTypeAnnotation(a, s, isTypeParameter);
     }
 
     /** Check an annotation of a symbol.
      */
     private void validateAnnotation(JCAnnotation a, JCTree declarationTree, Symbol s) {
+        /** NOTE: if annotation processors are present, annotation processing rounds can happen after this method,
+         *  this can impact in particular records for which annotations are forcibly propagated.
+         */
         validateAnnotationTree(a);
         boolean isRecordMember = ((s.flags_field & RECORD) != 0 || s.enclClass() != null && s.enclClass().isRecord());
 
@@ -3221,9 +3293,25 @@ public class Check {
                     rc.appendAttributes(s.getRawAttributes().stream().filter(anno ->
                             Arrays.stream(getTargetNames(anno.type.tsym)).anyMatch(name -> name == names.RECORD_COMPONENT)
                     ).collect(List.collector()));
-                    rc.setTypeAttributes(s.getRawTypeAttributes());
-                    // to get all the type annotations applied to the type
-                    rc.type = s.type;
+
+                    JCVariableDecl fieldAST = (JCVariableDecl) declarationTree;
+                    for (JCAnnotation fieldAnnot : fieldAST.mods.annotations) {
+                        for (JCAnnotation rcAnnot : rc.declarationFor().mods.annotations) {
+                            if (rcAnnot.pos == fieldAnnot.pos) {
+                                rcAnnot.setType(fieldAnnot.type);
+                                break;
+                            }
+                        }
+                    }
+
+                    /* At this point, we used to carry over any type annotations from the VARDEF to the record component, but
+                     * that is problematic, since we get here only when *some* annotation is applied to the SE5 (declaration)
+                     * annotation location, inadvertently failing to carry over the type annotations when the VarDef has no
+                     * annotations in the SE5 annotation location.
+                     *
+                     * Now type annotations are assigned to record components in a method that would execute irrespective of
+                     * whether there are SE5 annotations on a VarDef viz com.sun.tools.javac.code.TypeAnnotations.TypeAnnotationPositions.visitVarDef
+                     */
                 }
             }
         }
@@ -3327,8 +3415,10 @@ public class Check {
         }
     }
 
-    public void validateTypeAnnotation(JCAnnotation a, boolean isTypeParameter) {
+    public void validateTypeAnnotation(JCAnnotation a, Symbol s, boolean isTypeParameter) {
         Assert.checkNonNull(a.type);
+        // we just want to validate that the anotation doesn't have any wrong target
+        if (s != null) getApplicableTargets(a, s);
         validateAnnotationTree(a);
 
         if (a.hasTag(TYPE_ANNOTATION) &&
@@ -3544,7 +3634,7 @@ public class Check {
     protected boolean isTypeAnnotation(JCAnnotation a, boolean isTypeParameter) {
         List<Attribute> targets = typeAnnotations.annotationTargets(a.annotationType.type.tsym);
         return (targets == null) ?
-                false :
+                (Feature.NO_TARGET_ANNOTATION_APPLICABILITY.allowedInSource(source) && isTypeParameter) :
                 targets.stream()
                         .anyMatch(attr -> isTypeAnnotation(attr, isTypeParameter));
     }
@@ -3581,7 +3671,7 @@ public class Check {
 
     boolean annotationApplicable(JCAnnotation a, Symbol s) {
         Optional<Set<Name>> targets = getApplicableTargets(a, s);
-        /* the optional could be emtpy if the annotation is unknown in that case
+        /* the optional could be empty if the annotation is unknown in that case
          * we return that it is applicable and if it is erroneous that should imply
          * an error at the declaration site
          */
@@ -3657,9 +3747,10 @@ public class Check {
             } else if (target == names.MODULE) {
                 if (s.kind == MDL)
                     applicableTargets.add(names.MODULE);
-            } else
-                return Optional.empty(); // Unknown ElementType. This should be an error at declaration site,
-                                         // assume applicable.
+            } else {
+                log.error(a, Errors.AnnotationUnrecognizedAttributeName(a.type, target));
+                return Optional.empty(); // Unknown ElementType
+            }
         }
         return Optional.of(applicableTargets);
     }
@@ -3783,14 +3874,13 @@ public class Check {
             (s.flags() & DEPRECATED) != 0 &&
             !syms.deprecatedType.isErroneous() &&
             s.attribute(syms.deprecatedType.tsym) == null) {
-            log.warning(LintCategory.DEP_ANN,
-                    pos, Warnings.MissingDeprecatedAnnotation);
+            log.warning(pos, LintWarnings.MissingDeprecatedAnnotation);
         }
         // Note: @Deprecated has no effect on local variables, parameters and package decls.
         if (lint.isEnabled(LintCategory.DEPRECATION) && !s.isDeprecatableViaAnnotation()) {
             if (!syms.deprecatedType.isErroneous() && s.attribute(syms.deprecatedType.tsym) != null) {
-                log.warning(LintCategory.DEPRECATION, pos,
-                            Warnings.DeprecatedAnnotationHasNoEffect(Kinds.kindName(s)));
+                log.warning(pos,
+                            LintWarnings.DeprecatedAnnotationHasNoEffect(Kinds.kindName(s)));
             }
         }
     }
@@ -3804,13 +3894,13 @@ public class Check {
                 || s.isDeprecated() && !other.isDeprecated())
                 && (s.outermostClass() != other.outermostClass() || s.outermostClass() == null)
                 && s.kind != Kind.PCK) {
-            deferredLintHandler.report(() -> warnDeprecated(pos.get(), s));
+            deferredLintHandler.report(_l -> warnDeprecated(pos.get(), s));
         }
     }
 
     void checkSunAPI(final DiagnosticPosition pos, final Symbol s) {
         if ((s.flags() & PROPRIETARY) != 0) {
-            deferredLintHandler.report(() -> {
+            deferredLintHandler.report(_l -> {
                 log.mandatoryWarning(pos, Warnings.SunProprietary(s));
             });
         }
@@ -3823,16 +3913,37 @@ public class Check {
     }
 
     void checkPreview(DiagnosticPosition pos, Symbol other, Symbol s) {
-        if ((s.flags() & PREVIEW_API) != 0 && s.packge().modle != other.packge().modle) {
-            if ((s.flags() & PREVIEW_REFLECTIVE) == 0) {
+        checkPreview(pos, other, Type.noType, s);
+    }
+
+    void checkPreview(DiagnosticPosition pos, Symbol other, Type site, Symbol s) {
+        boolean sIsPreview;
+        Symbol previewSymbol;
+        if ((s.flags() & PREVIEW_API) != 0) {
+            sIsPreview = true;
+            previewSymbol=  s;
+        } else if ((s.kind == Kind.MTH || s.kind == Kind.VAR) &&
+                   site.tsym != null &&
+                   (site.tsym.flags() & PREVIEW_API) == 0 &&
+                   (s.owner.flags() & PREVIEW_API) != 0) {
+            //calling a method, or using a field, whose owner is a preview, but
+            //using a site that is not a preview. Also produce an error or warning:
+            sIsPreview = true;
+            previewSymbol = s.owner;
+        } else {
+            sIsPreview = false;
+            previewSymbol = null;
+        }
+        if (sIsPreview && !preview.participatesInPreview(syms, other, s) && !disablePreviewCheck) {
+            if ((previewSymbol.flags() & PREVIEW_REFLECTIVE) == 0) {
                 if (!preview.isEnabled()) {
                     log.error(pos, Errors.IsPreview(s));
                 } else {
                     preview.markUsesPreview(pos);
-                    deferredLintHandler.report(() -> warnPreviewAPI(pos, Warnings.IsPreview(s)));
+                    deferredLintHandler.report(_l -> warnPreviewAPI(pos, LintWarnings.IsPreview(s)));
                 }
             } else {
-                    deferredLintHandler.report(() -> warnPreviewAPI(pos, Warnings.IsPreviewReflective(s)));
+                    deferredLintHandler.report(_l -> warnPreviewAPI(pos, LintWarnings.IsPreviewReflective(s)));
             }
         }
         if (preview.declaredUsingPreviewFeature(s)) {
@@ -3841,8 +3952,14 @@ public class Check {
                 //If "s" is compiled from source, then there was an error for it already;
                 //if "s" is from classfile, there already was an error for the classfile.
                 preview.markUsesPreview(pos);
-                deferredLintHandler.report(() -> warnDeclaredUsingPreview(pos, s));
+                deferredLintHandler.report(_l -> warnDeclaredUsingPreview(pos, s));
             }
+        }
+    }
+
+    void checkRestricted(DiagnosticPosition pos, Symbol s) {
+        if (s.kind == MTH && (s.flags() & RESTRICTED) != 0) {
+            deferredLintHandler.report(_l -> warnRestrictedAPI(pos, s));
         }
     }
 
@@ -3910,14 +4027,16 @@ public class Check {
      *  constructors.
      */
     void checkCyclicConstructors(JCClassDecl tree) {
-        Map<Symbol,Symbol> callMap = new HashMap<>();
+        // use LinkedHashMap so we generate errors deterministically
+        Map<Symbol,Symbol> callMap = new LinkedHashMap<>();
 
         // enter each constructor this-call into the map
         for (List<JCTree> l = tree.defs; l.nonEmpty(); l = l.tail) {
-            JCMethodInvocation app = TreeInfo.firstConstructorCall(l.head);
-            if (app == null) continue;
-            JCMethodDecl meth = (JCMethodDecl) l.head;
-            if (TreeInfo.name(app.meth) == names._this) {
+            if (!TreeInfo.isConstructor(l.head))
+                continue;
+            JCMethodDecl meth = (JCMethodDecl)l.head;
+            JCMethodInvocation app = TreeInfo.findConstructorCall(meth);
+            if (app != null && TreeInfo.name(app.meth) == names._this) {
                 callMap.put(meth.sym, TreeInfo.symbol(app.meth));
             } else {
                 meth.sym.flags_field |= ACYCLIC;
@@ -3939,7 +4058,7 @@ public class Check {
                                         Map<Symbol,Symbol> callMap) {
         if (ctor != null && (ctor.flags_field & ACYCLIC) == 0) {
             if ((ctor.flags_field & LOCKED) != 0) {
-                log.error(TreeInfo.diagnosticPositionFor(ctor, tree),
+                log.error(TreeInfo.diagnosticPositionFor(ctor, tree, false, t -> t.hasTag(IDENT)),
                           Errors.RecursiveCtorInvocation);
             } else {
                 ctor.flags_field |= LOCKED;
@@ -3947,6 +4066,151 @@ public class Check {
                 ctor.flags_field &= ~LOCKED;
             }
             ctor.flags_field |= ACYCLIC;
+        }
+    }
+
+/* *************************************************************************
+ * Verify the proper placement of super()/this() calls.
+ *
+ *    - super()/this() may only appear in constructors
+ *    - There must be at most one super()/this() call per constructor
+ *    - The super()/this() call, if any, must be a top-level statement in the
+ *      constructor, i.e., not nested inside any other statement or block
+ *    - There must be no return statements prior to the super()/this() call
+ **************************************************************************/
+
+    void checkSuperInitCalls(JCClassDecl tree) {
+        new SuperThisChecker().check(tree);
+    }
+
+    private class SuperThisChecker extends TreeScanner {
+
+        // Match this scan stack: 1=JCMethodDecl, 2=JCExpressionStatement, 3=JCMethodInvocation
+        private static final int MATCH_SCAN_DEPTH = 3;
+
+        private boolean constructor;        // is this method a constructor?
+        private boolean firstStatement;     // at the first statement in method?
+        private JCReturn earlyReturn;       // first return prior to the super()/init(), if any
+        private Name initCall;              // whichever of "super" or "init" we've seen already
+        private int scanDepth;              // current scan recursion depth in method body
+
+        public void check(JCClassDecl classDef) {
+            scan(classDef.defs);
+        }
+
+        @Override
+        public void visitMethodDef(JCMethodDecl tree) {
+            Assert.check(!constructor);
+            Assert.check(earlyReturn == null);
+            Assert.check(initCall == null);
+            Assert.check(scanDepth == 1);
+
+            // Initialize state for this method
+            constructor = TreeInfo.isConstructor(tree);
+            try {
+
+                // Scan method body
+                if (tree.body != null) {
+                    firstStatement = true;
+                    for (List<JCStatement> l = tree.body.stats; l.nonEmpty(); l = l.tail) {
+                        scan(l.head);
+                        firstStatement = false;
+                    }
+                }
+
+                // Verify no 'return' seen prior to an explicit super()/this() call
+                if (constructor && earlyReturn != null && initCall != null)
+                    log.error(earlyReturn.pos(), Errors.ReturnBeforeSuperclassInitialized);
+            } finally {
+                firstStatement = false;
+                constructor = false;
+                earlyReturn = null;
+                initCall = null;
+            }
+        }
+
+        @Override
+        public void scan(JCTree tree) {
+            scanDepth++;
+            try {
+                super.scan(tree);
+            } finally {
+                scanDepth--;
+            }
+        }
+
+        @Override
+        public void visitApply(JCMethodInvocation apply) {
+            do {
+
+                // Is this a super() or this() call?
+                Name methodName = TreeInfo.name(apply.meth);
+                if (methodName != names._super && methodName != names._this)
+                    break;
+
+                // super()/this() calls must only appear in a constructor
+                if (!constructor) {
+                    log.error(apply.pos(), Errors.CallMustOnlyAppearInCtor);
+                    break;
+                }
+
+                // super()/this() calls must be a top level statement
+                if (scanDepth != MATCH_SCAN_DEPTH) {
+                    log.error(apply.pos(), Errors.CtorCallsNotAllowedHere);
+                    break;
+                }
+
+                // super()/this() calls must not appear more than once
+                if (initCall != null) {
+                    log.error(apply.pos(), Errors.RedundantSuperclassInit);
+                    break;
+                }
+
+                // If super()/this() isn't first, require flexible constructors feature
+                if (!firstStatement)
+                    preview.checkSourceLevel(apply.pos(), Feature.FLEXIBLE_CONSTRUCTORS);
+
+                // We found a legitimate super()/this() call; remember it
+                initCall = methodName;
+            } while (false);
+
+            // Proceed
+            super.visitApply(apply);
+        }
+
+        @Override
+        public void visitReturn(JCReturn tree) {
+            if (constructor && initCall == null && earlyReturn == null)
+                earlyReturn = tree;             // we have seen a return but not (yet) a super()/this()
+            super.visitReturn(tree);
+        }
+
+        @Override
+        public void visitClassDef(JCClassDecl tree) {
+            // don't descend any further
+        }
+
+        @Override
+        public void visitLambda(JCLambda tree) {
+            final boolean constructorPrev = constructor;
+            final boolean firstStatementPrev = firstStatement;
+            final JCReturn earlyReturnPrev = earlyReturn;
+            final Name initCallPrev = initCall;
+            final int scanDepthPrev = scanDepth;
+            constructor = false;
+            firstStatement = false;
+            earlyReturn = null;
+            initCall = null;
+            scanDepth = 0;
+            try {
+                super.visitLambda(tree);
+            } finally {
+                constructor = constructorPrev;
+                firstStatement = firstStatementPrev;
+                earlyReturn = earlyReturnPrev;
+                initCall = initCallPrev;
+                scanDepth = scanDepthPrev;
+            }
         }
     }
 
@@ -3967,8 +4231,21 @@ public class Check {
             int opc = ((OperatorSymbol)operator).opcode;
             if (opc == ByteCodes.idiv || opc == ByteCodes.imod
                 || opc == ByteCodes.ldiv || opc == ByteCodes.lmod) {
-                deferredLintHandler.report(() -> warnDivZero(pos));
+                deferredLintHandler.report(_l -> lint.logIfEnabled(pos, LintWarnings.DivZero));
             }
+        }
+    }
+
+    /**
+     *  Check for possible loss of precission
+     *  @param pos           Position for error reporting.
+     *  @param found    The computed type of the tree
+     *  @param req  The computed type of the tree
+     */
+    void checkLossOfPrecision(final DiagnosticPosition pos, Type found, Type req) {
+        if (found.isNumeric() && req.isNumeric() && !types.isAssignable(found, req)) {
+            deferredLintHandler.report(_l ->
+                lint.logIfEnabled(pos, LintWarnings.PossibleLossOfPrecision(found, req)));
         }
     }
 
@@ -3976,9 +4253,9 @@ public class Check {
      * Check for empty statements after if
      */
     void checkEmptyIf(JCIf tree) {
-        if (tree.thenpart.hasTag(SKIP) && tree.elsepart == null &&
-                lint.isEnabled(LintCategory.EMPTY))
-            log.warning(LintCategory.EMPTY, tree.thenpart.pos(), Warnings.EmptyIf);
+        if (tree.thenpart.hasTag(SKIP) && tree.elsepart == null) {
+            lint.logIfEnabled(tree.thenpart.pos(), LintWarnings.EmptyIf);
+        }
     }
 
     /** Check that symbol is unique in given scope.
@@ -4120,13 +4397,12 @@ public class Check {
     /** Check that an auxiliary class is not accessed from any other file than its own.
      */
     void checkForBadAuxiliaryClassAccess(DiagnosticPosition pos, Env<AttrContext> env, ClassSymbol c) {
-        if (lint.isEnabled(Lint.LintCategory.AUXILIARYCLASS) &&
-            (c.flags() & AUXILIARY) != 0 &&
+        if ((c.flags() & AUXILIARY) != 0 &&
             rs.isAccessible(env, c) &&
             !fileManager.isSameFile(c.sourcefile, env.toplevel.sourcefile))
         {
-            log.warning(pos,
-                        Warnings.AuxiliaryClassAccessedFromOutsideOfItsSourceFile(c, c.sourcefile));
+            lint.logIfEnabled(pos,
+                        LintWarnings.AuxiliaryClassAccessedFromOutsideOfItsSourceFile(c, c.sourcefile));
         }
     }
 
@@ -4168,11 +4444,8 @@ public class Check {
                             // Warning may be suppressed by
                             // annotations; check again for being
                             // enabled in the deferred context.
-                            deferredLintHandler.report(() -> {
-                                if (lint.isEnabled(LintCategory.MISSING_EXPLICIT_CTOR))
-                                   log.warning(LintCategory.MISSING_EXPLICIT_CTOR,
-                                               pos, Warnings.MissingExplicitCtor(c, pkg, modle));
-                                                       });
+                            deferredLintHandler.report(_l ->
+                                lint.logIfEnabled(pos, LintWarnings.MissingExplicitCtor(c, pkg, modle)));
                         } else {
                             return;
                         }
@@ -4201,14 +4474,14 @@ public class Check {
             if (warned) return; // suppress redundant diagnostics
             switch (lint) {
                 case UNCHECKED:
-                    Check.this.warnUnchecked(pos(), Warnings.ProbFoundReq(diags.fragment(uncheckedKey), found, expected));
+                    Check.this.warnUnchecked(pos(), LintWarnings.ProbFoundReq(diags.fragment(uncheckedKey), found, expected));
                     break;
                 case VARARGS:
                     if (method != null &&
                             method.attribute(syms.trustMeType.tsym) != null &&
                             isTrustMeAllowedOnMethod(method) &&
                             !types.isReifiable(method.type.getParameterTypes().last())) {
-                        Check.this.warnUnsafeVararg(pos(), Warnings.VarargsUnsafeUseVarargsParam(method.params.last()));
+                        Check.this.lint.logIfEnabled(pos(), LintWarnings.VarargsUnsafeUseVarargsParam(method.params.last()));
                     }
                     break;
                 default:
@@ -4245,10 +4518,12 @@ public class Check {
     }
 
     public void checkImportsResolvable(final JCCompilationUnit toplevel) {
-        for (final JCImport imp : toplevel.getImports()) {
+        for (final JCImportBase impBase : toplevel.getImports()) {
+            if (!(impBase instanceof JCImport imp))
+                continue;
             if (!imp.staticImport || !imp.qualid.hasTag(SELECT))
                 continue;
-            final JCFieldAccess select = (JCFieldAccess) imp.qualid;
+            final JCFieldAccess select = imp.qualid;
             final Symbol origin;
             if (select.name == names.asterisk || (origin = TreeInfo.symbol(select.selected)) == null || origin.kind != TYP)
                 continue;
@@ -4269,12 +4544,13 @@ public class Check {
 
     // Check that packages imported are in scope (JLS 7.4.3, 6.3, 6.5.3.1, 6.5.3.2)
     public void checkImportedPackagesObservable(final JCCompilationUnit toplevel) {
-        OUTER: for (JCImport imp : toplevel.getImports()) {
-            if (!imp.staticImport && TreeInfo.name(imp.qualid) == names.asterisk) {
-                TypeSymbol tsym = ((JCFieldAccess)imp.qualid).selected.type.tsym;
+        OUTER: for (JCImportBase impBase : toplevel.getImports()) {
+            if (impBase instanceof JCImport imp && !imp.staticImport &&
+                TreeInfo.name(imp.qualid) == names.asterisk) {
+                TypeSymbol tsym = imp.qualid.selected.type.tsym;
                 if (tsym.kind == PCK && tsym.members().isEmpty() &&
                     !(Feature.IMPORT_ON_DEMAND_OBSERVABLE_PACKAGES.allowedInSource(source) && tsym.exists())) {
-                    log.error(DiagnosticFlag.RESOLVE_ERROR, imp.pos, Errors.DoesntExist(tsym));
+                    log.error(DiagnosticFlag.RESOLVE_ERROR, imp.qualid.selected.pos(), Errors.DoesntExist(tsym));
                 }
             }
         }
@@ -4460,7 +4736,7 @@ public class Check {
         }
         private void checkVisible(DiagnosticPosition pos, Symbol what, PackageSymbol inPackage, boolean inSuperType) {
             if (!isAPISymbol(what) && !inSuperType) { //package private/private element
-                log.warning(LintCategory.EXPORTS, pos, Warnings.LeaksNotAccessible(kindName(what), what, what.packge().modle));
+                log.warning(pos, LintWarnings.LeaksNotAccessible(kindName(what), what, what.packge().modle));
                 return ;
             }
 
@@ -4469,13 +4745,13 @@ public class Check {
             ExportsDirective inExport = findExport(inPackage);
 
             if (whatExport == null) { //package not exported:
-                log.warning(LintCategory.EXPORTS, pos, Warnings.LeaksNotAccessibleUnexported(kindName(what), what, what.packge().modle));
+                log.warning(pos, LintWarnings.LeaksNotAccessibleUnexported(kindName(what), what, what.packge().modle));
                 return ;
             }
 
             if (whatExport.modules != null) {
                 if (inExport.modules == null || !whatExport.modules.containsAll(inExport.modules)) {
-                    log.warning(LintCategory.EXPORTS, pos, Warnings.LeaksNotAccessibleUnexportedQualified(kindName(what), what, what.packge().modle));
+                    log.warning(pos, LintWarnings.LeaksNotAccessibleUnexportedQualified(kindName(what), what, what.packge().modle));
                 }
             }
 
@@ -4497,36 +4773,32 @@ public class Check {
                     }
                 }
 
-                log.warning(LintCategory.EXPORTS, pos, Warnings.LeaksNotAccessibleNotRequiredTransitive(kindName(what), what, what.packge().modle));
+                log.warning(pos, LintWarnings.LeaksNotAccessibleNotRequiredTransitive(kindName(what), what, what.packge().modle));
             }
         }
 
     void checkModuleExists(final DiagnosticPosition pos, ModuleSymbol msym) {
         if (msym.kind != MDL) {
-            deferredLintHandler.report(() -> {
-                if (lint.isEnabled(LintCategory.MODULE))
-                    log.warning(LintCategory.MODULE, pos, Warnings.ModuleNotFound(msym));
-            });
+            deferredLintHandler.report(_l ->
+                lint.logIfEnabled(pos, LintWarnings.ModuleNotFound(msym)));
         }
     }
 
     void checkPackageExistsForOpens(final DiagnosticPosition pos, PackageSymbol packge) {
         if (packge.members().isEmpty() &&
             ((packge.flags() & Flags.HAS_RESOURCE) == 0)) {
-            deferredLintHandler.report(() -> {
-                if (lint.isEnabled(LintCategory.OPENS))
-                    log.warning(pos, Warnings.PackageEmptyOrNotFound(packge));
-            });
+            deferredLintHandler.report(_l ->
+                lint.logIfEnabled(pos, LintWarnings.PackageEmptyOrNotFound(packge)));
         }
     }
 
     void checkModuleRequires(final DiagnosticPosition pos, final RequiresDirective rd) {
         if ((rd.module.flags() & Flags.AUTOMATIC_MODULE) != 0) {
-            deferredLintHandler.report(() -> {
+            deferredLintHandler.report(_l -> {
                 if (rd.isTransitive() && lint.isEnabled(LintCategory.REQUIRES_TRANSITIVE_AUTOMATIC)) {
-                    log.warning(pos, Warnings.RequiresTransitiveAutomatic);
-                } else if (lint.isEnabled(LintCategory.REQUIRES_AUTOMATIC)) {
-                    log.warning(pos, Warnings.RequiresAutomatic);
+                    log.warning(pos, LintWarnings.RequiresTransitiveAutomatic);
+                } else {
+                    lint.logIfEnabled(pos, LintWarnings.RequiresAutomatic);
                 }
             });
         }
@@ -4539,59 +4811,1020 @@ public class Check {
      * @param cases the cases that should be checked.
      */
     void checkSwitchCaseStructure(List<JCCase> cases) {
-        boolean wasConstant = false;          // Seen a constant in the same case label
-        boolean wasDefault = false;           // Seen a default in the same case label
-        boolean wasNullPattern = false;       // Seen a null pattern in the same case label,
-                                              //or fall through from a null pattern
-        boolean wasPattern = false;           // Seen a pattern in the same case label
-                                              //or fall through from a pattern
-        boolean wasTypePattern = false;       // Seen a pattern in the same case label
-                                              //or fall through from a type pattern
-        boolean wasNonEmptyFallThrough = false;
         for (List<JCCase> l = cases; l.nonEmpty(); l = l.tail) {
             JCCase c = l.head;
-            for (JCCaseLabel pat : c.labels) {
-                if (pat.isExpression()) {
-                    JCExpression expr = (JCExpression) pat;
-                    if (TreeInfo.isNull(expr)) {
-                        if (wasPattern && !wasTypePattern && !wasNonEmptyFallThrough) {
-                            log.error(pat.pos(), Errors.FlowsThroughFromPattern);
+            if (c.labels.head instanceof JCConstantCaseLabel constLabel) {
+                if (TreeInfo.isNull(constLabel.expr)) {
+                    if (c.labels.tail.nonEmpty()) {
+                        if (c.labels.tail.head instanceof JCDefaultCaseLabel defLabel) {
+                            if (c.labels.tail.tail.nonEmpty()) {
+                                log.error(c.labels.tail.tail.head.pos(), Errors.InvalidCaseLabelCombination);
+                            }
+                        } else {
+                            log.error(c.labels.tail.head.pos(), Errors.InvalidCaseLabelCombination);
                         }
-                        wasNullPattern = true;
-                    } else {
-                        if (wasPattern && !wasNonEmptyFallThrough) {
-                            log.error(pat.pos(), Errors.FlowsThroughFromPattern);
-                        }
-                        wasConstant = true;
                     }
-                } else if (pat.hasTag(DEFAULTCASELABEL)) {
-                    if (wasPattern && !wasNonEmptyFallThrough) {
-                        log.error(pat.pos(), Errors.FlowsThroughFromPattern);
-                    }
-                    wasDefault = true;
                 } else {
-                    boolean isTypePattern = pat.hasTag(BINDINGPATTERN);
-                    if (wasPattern || wasConstant || wasDefault ||
-                        (wasNullPattern && (!isTypePattern || wasNonEmptyFallThrough))) {
-                        log.error(pat.pos(), Errors.FlowsThroughToPattern);
+                    for (JCCaseLabel label : c.labels.tail) {
+                        if (!(label instanceof JCConstantCaseLabel) || TreeInfo.isNullCaseLabel(label)) {
+                            log.error(label.pos(), Errors.InvalidCaseLabelCombination);
+                            break;
+                        }
                     }
-                    wasPattern = true;
-                    wasTypePattern = isTypePattern;
+                }
+            } else if (c.labels.tail.nonEmpty()) {
+                var patterCaseLabels = c.labels.stream().filter(ll -> ll instanceof JCPatternCaseLabel).map(cl -> (JCPatternCaseLabel)cl);
+                var allUnderscore = patterCaseLabels.allMatch(pcl -> !hasBindings(pcl.getPattern()));
+
+                if (!allUnderscore) {
+                    log.error(c.labels.tail.head.pos(), Errors.FlowsThroughFromPattern);
+                }
+
+                boolean allPatternCaseLabels = c.labels.stream().allMatch(p -> p instanceof JCPatternCaseLabel);
+
+                if (allPatternCaseLabels) {
+                    preview.checkSourceLevel(c.labels.tail.head.pos(), Feature.UNNAMED_VARIABLES);
+                }
+
+                for (JCCaseLabel label : c.labels.tail) {
+                    if (label instanceof JCConstantCaseLabel) {
+                        log.error(label.pos(), Errors.InvalidCaseLabelCombination);
+                        break;
+                    }
+                }
+            }
+        }
+
+        boolean isCaseStatementGroup = cases.nonEmpty() &&
+                                       cases.head.caseKind == CaseTree.CaseKind.STATEMENT;
+
+        if (isCaseStatementGroup) {
+            boolean previousCompletessNormally = false;
+            for (List<JCCase> l = cases; l.nonEmpty(); l = l.tail) {
+                JCCase c = l.head;
+                if (previousCompletessNormally &&
+                    c.stats.nonEmpty() &&
+                    c.labels.head instanceof JCPatternCaseLabel patternLabel &&
+                    (hasBindings(patternLabel.pat) || hasBindings(c.guard))) {
+                    log.error(c.labels.head.pos(), Errors.FlowsThroughToPattern);
+                } else if (c.stats.isEmpty() &&
+                           c.labels.head instanceof JCPatternCaseLabel patternLabel &&
+                           (hasBindings(patternLabel.pat) || hasBindings(c.guard)) &&
+                           hasStatements(l.tail)) {
+                    log.error(c.labels.head.pos(), Errors.FlowsThroughFromPattern);
+                }
+                previousCompletessNormally = c.completesNormally;
+            }
+        }
+    }
+
+    boolean hasBindings(JCTree p) {
+        boolean[] bindings = new boolean[1];
+
+        new TreeScanner() {
+            @Override
+            public void visitBindingPattern(JCBindingPattern tree) {
+                bindings[0] = !tree.var.sym.isUnnamedVariable();
+                super.visitBindingPattern(tree);
+            }
+        }.scan(p);
+
+        return bindings[0];
+    }
+
+    boolean hasStatements(List<JCCase> cases) {
+        for (List<JCCase> l = cases; l.nonEmpty(); l = l.tail) {
+            if (l.head.stats.nonEmpty()) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+    void checkSwitchCaseLabelDominated(JCCaseLabel unconditionalCaseLabel, List<JCCase> cases) {
+        List<Pair<JCCase, JCCaseLabel>> caseLabels = List.nil();
+        boolean seenDefault = false;
+        boolean seenDefaultLabel = false;
+        boolean warnDominatedByDefault = false;
+        boolean unconditionalFound = false;
+
+        for (List<JCCase> l = cases; l.nonEmpty(); l = l.tail) {
+            JCCase c = l.head;
+            for (JCCaseLabel label : c.labels) {
+                if (label.hasTag(DEFAULTCASELABEL)) {
+                    seenDefault = true;
+                    seenDefaultLabel |=
+                            TreeInfo.isNullCaseLabel(c.labels.head);
+                    continue;
+                }
+                if (TreeInfo.isNullCaseLabel(label)) {
+                    if (seenDefault) {
+                        log.error(label.pos(), Errors.PatternDominated);
+                    }
+                    continue;
+                }
+                if (seenDefault && !warnDominatedByDefault) {
+                    if (label.hasTag(PATTERNCASELABEL) ||
+                        (label instanceof JCConstantCaseLabel && seenDefaultLabel)) {
+                        log.error(label.pos(), Errors.PatternDominated);
+                        warnDominatedByDefault = true;
+                    }
+                }
+                Type currentType = labelType(label);
+                for (Pair<JCCase, JCCaseLabel> caseAndLabel : caseLabels) {
+                    JCCase testCase = caseAndLabel.fst;
+                    JCCaseLabel testCaseLabel = caseAndLabel.snd;
+                    Type testType = labelType(testCaseLabel);
+                    boolean dominated = false;
+                    if (types.isUnconditionallyExact(currentType, testType) &&
+                        !currentType.hasTag(ERROR) && !testType.hasTag(ERROR)) {
+                        //the current label is potentially dominated by the existing (test) label, check:
+                        if (label instanceof JCConstantCaseLabel) {
+                            dominated |= !(testCaseLabel instanceof JCConstantCaseLabel) &&
+                                         TreeInfo.unguardedCase(testCase);
+                        } else if (label instanceof JCPatternCaseLabel patternCL &&
+                                   testCaseLabel instanceof JCPatternCaseLabel testPatternCaseLabel &&
+                                   (testCase.equals(c) || TreeInfo.unguardedCase(testCase))) {
+                            dominated = patternDominated(testPatternCaseLabel.pat,
+                                                         patternCL.pat);
+                        }
+                    }
+
+                    if (dominated) {
+                        log.error(label.pos(), Errors.PatternDominated);
+                    }
+                }
+                caseLabels = caseLabels.prepend(Pair.of(c, label));
+            }
+        }
+    }
+        //where:
+        private Type labelType(JCCaseLabel label) {
+            return types.erasure(switch (label.getTag()) {
+                case PATTERNCASELABEL -> ((JCPatternCaseLabel) label).pat.type;
+                case CONSTANTCASELABEL -> ((JCConstantCaseLabel) label).expr.type;
+                default -> throw Assert.error("Unexpected tree kind: " + label.getTag());
+            });
+        }
+        private boolean patternDominated(JCPattern existingPattern, JCPattern currentPattern) {
+            Type existingPatternType = types.erasure(existingPattern.type);
+            Type currentPatternType = types.erasure(currentPattern.type);
+            if (!types.isUnconditionallyExact(currentPatternType, existingPatternType)) {
+                return false;
+            }
+            if (currentPattern instanceof JCBindingPattern ||
+                currentPattern instanceof JCAnyPattern) {
+                return existingPattern instanceof JCBindingPattern ||
+                       existingPattern instanceof JCAnyPattern;
+            } else if (currentPattern instanceof JCRecordPattern currentRecordPattern) {
+                if (existingPattern instanceof JCBindingPattern ||
+                    existingPattern instanceof JCAnyPattern) {
+                    return true;
+                } else if (existingPattern instanceof JCRecordPattern existingRecordPattern) {
+                    List<JCPattern> existingNested = existingRecordPattern.nested;
+                    List<JCPattern> currentNested = currentRecordPattern.nested;
+                    if (existingNested.size() != currentNested.size()) {
+                        return false;
+                    }
+                    while (existingNested.nonEmpty()) {
+                        if (!patternDominated(existingNested.head, currentNested.head)) {
+                            return false;
+                        }
+                        existingNested = existingNested.tail;
+                        currentNested = currentNested.tail;
+                    }
+                    return true;
+                } else {
+                    Assert.error("Unknown pattern: " + existingPattern.getTag());
+                }
+            } else {
+                Assert.error("Unknown pattern: " + currentPattern.getTag());
+            }
+            return false;
+        }
+
+    /** check if a type is a subtype of Externalizable, if that is available. */
+    boolean isExternalizable(Type t) {
+        try {
+            syms.externalizableType.complete();
+        } catch (CompletionFailure e) {
+            return false;
+        }
+        return types.isSubtype(t, syms.externalizableType);
+    }
+
+    /**
+     * Check structure of serialization declarations.
+     */
+    public void checkSerialStructure(Env<AttrContext> env, JCClassDecl tree, ClassSymbol c) {
+        (new SerialTypeVisitor(env)).visit(c, tree);
+    }
+
+    /**
+     * This visitor will warn if a serialization-related field or
+     * method is declared in a suspicious or incorrect way. In
+     * particular, it will warn for cases where the runtime
+     * serialization mechanism will silently ignore a mis-declared
+     * entity.
+     *
+     * Distinguished serialization-related fields and methods:
+     *
+     * Methods:
+     *
+     * private void writeObject(ObjectOutputStream stream) throws IOException
+     * ANY-ACCESS-MODIFIER Object writeReplace() throws ObjectStreamException
+     *
+     * private void readObject(ObjectInputStream stream) throws IOException, ClassNotFoundException
+     * private void readObjectNoData() throws ObjectStreamException
+     * ANY-ACCESS-MODIFIER Object readResolve() throws ObjectStreamException
+     *
+     * Fields:
+     *
+     * private static final long serialVersionUID
+     * private static final ObjectStreamField[] serialPersistentFields
+     *
+     * Externalizable: methods defined on the interface
+     * public void writeExternal(ObjectOutput) throws IOException
+     * public void readExternal(ObjectInput) throws IOException
+     */
+    private class SerialTypeVisitor extends ElementKindVisitor14<Void, JCClassDecl> {
+        Env<AttrContext> env;
+        SerialTypeVisitor(Env<AttrContext> env) {
+            this.lint = Check.this.lint;
+            this.env = env;
+        }
+
+        private static final Set<String> serialMethodNames =
+            Set.of("writeObject", "writeReplace",
+                   "readObject",  "readObjectNoData",
+                   "readResolve");
+
+        private static final Set<String> serialFieldNames =
+            Set.of("serialVersionUID", "serialPersistentFields");
+
+        // Type of serialPersistentFields
+        private final Type OSF_TYPE = new Type.ArrayType(syms.objectStreamFieldType, syms.arrayClass);
+
+        Lint lint;
+
+        @Override
+        public Void defaultAction(Element e, JCClassDecl p) {
+            throw new IllegalArgumentException(Objects.requireNonNullElse(e.toString(), ""));
+        }
+
+        @Override
+        public Void visitType(TypeElement e, JCClassDecl p) {
+            runUnderLint(e, p, (symbol, param) -> super.visitType(symbol, param));
+            return null;
+        }
+
+        @Override
+        public Void visitTypeAsClass(TypeElement e,
+                                     JCClassDecl p) {
+            // Anonymous classes filtered out by caller.
+
+            ClassSymbol c = (ClassSymbol)e;
+
+            checkCtorAccess(p, c);
+
+            // Check for missing serialVersionUID; check *not* done
+            // for enums or records.
+            VarSymbol svuidSym = null;
+            for (Symbol sym : c.members().getSymbolsByName(names.serialVersionUID)) {
+                if (sym.kind == VAR) {
+                    svuidSym = (VarSymbol)sym;
+                    break;
                 }
             }
 
-            boolean completesNormally = c.caseKind == CaseTree.CaseKind.STATEMENT ? c.completesNormally
-                                                                                  : false;
-
-            if (c.stats.nonEmpty()) {
-                wasConstant = false;
-                wasDefault = false;
-                wasNullPattern &= completesNormally;
-                wasPattern &= completesNormally;
-                wasTypePattern &= completesNormally;
+            if (svuidSym == null) {
+                log.warning(p.pos(), LintWarnings.MissingSVUID(c));
             }
 
-            wasNonEmptyFallThrough = c.stats.nonEmpty() && completesNormally;
+            // Check for serialPersistentFields to gate checks for
+            // non-serializable non-transient instance fields
+            boolean serialPersistentFieldsPresent =
+                    c.members()
+                     .getSymbolsByName(names.serialPersistentFields, sym -> sym.kind == VAR)
+                     .iterator()
+                     .hasNext();
+
+            // Check declarations of serialization-related methods and
+            // fields
+            final boolean[] hasWriteReplace = {false};
+            for(Symbol el : c.getEnclosedElements()) {
+                runUnderLint(el, p, (enclosed, tree) -> {
+                    String name = null;
+                    switch(enclosed.getKind()) {
+                    case FIELD -> {
+                        if (!serialPersistentFieldsPresent) {
+                            var flags = enclosed.flags();
+                            if ( ((flags & TRANSIENT) == 0) &&
+                                 ((flags & STATIC) == 0)) {
+                                Type varType = enclosed.asType();
+                                if (!canBeSerialized(varType)) {
+                                    // Note per JLS arrays are
+                                    // serializable even if the
+                                    // component type is not.
+                                    log.warning(
+                                            TreeInfo.diagnosticPositionFor(enclosed, tree),
+                                                LintWarnings.NonSerializableInstanceField);
+                                } else if (varType.hasTag(ARRAY)) {
+                                    ArrayType arrayType = (ArrayType)varType;
+                                    Type elementType = arrayType.elemtype;
+                                    while (elementType.hasTag(ARRAY)) {
+                                        arrayType = (ArrayType)elementType;
+                                        elementType = arrayType.elemtype;
+                                    }
+                                    if (!canBeSerialized(elementType)) {
+                                        log.warning(
+                                                TreeInfo.diagnosticPositionFor(enclosed, tree),
+                                                    LintWarnings.NonSerializableInstanceFieldArray(elementType));
+                                    }
+                                }
+                            }
+                        }
+
+                        name = enclosed.getSimpleName().toString();
+                        if (serialFieldNames.contains(name)) {
+                            VarSymbol field = (VarSymbol)enclosed;
+                            switch (name) {
+                            case "serialVersionUID"       ->  checkSerialVersionUID(tree, e, field);
+                            case "serialPersistentFields" ->  checkSerialPersistentFields(tree, e, field);
+                            default -> throw new AssertionError();
+                            }
+                        }
+                    }
+
+                    // Correctly checking the serialization-related
+                    // methods is subtle. For the methods declared to be
+                    // private or directly declared in the class, the
+                    // enclosed elements of the class can be checked in
+                    // turn. However, writeReplace and readResolve can be
+                    // declared in a superclass and inherited. Note that
+                    // the runtime lookup walks the superclass chain
+                    // looking for writeReplace/readResolve via
+                    // Class.getDeclaredMethod. This differs from calling
+                    // Elements.getAllMembers(TypeElement) as the latter
+                    // will also pull in default methods from
+                    // superinterfaces. In other words, the runtime checks
+                    // (which long predate default methods on interfaces)
+                    // do not admit the possibility of inheriting methods
+                    // this way, a difference from general inheritance.
+
+                    // The current implementation just checks the enclosed
+                    // elements and does not directly check the inherited
+                    // methods. If all the types are being checked this is
+                    // less of a concern; however, there are cases that
+                    // could be missed. In particular, readResolve and
+                    // writeReplace could, in principle, by inherited from
+                    // a non-serializable superclass and thus not checked
+                    // even if compiled with a serializable child class.
+                    case METHOD -> {
+                        var method = (MethodSymbol)enclosed;
+                        name = method.getSimpleName().toString();
+                        if (serialMethodNames.contains(name)) {
+                            switch (name) {
+                            case "writeObject"      -> checkWriteObject(tree, e, method);
+                            case "writeReplace"     -> {hasWriteReplace[0] = true; hasAppropriateWriteReplace(tree, method, true);}
+                            case "readObject"       -> checkReadObject(tree,e, method);
+                            case "readObjectNoData" -> checkReadObjectNoData(tree, e, method);
+                            case "readResolve"      -> checkReadResolve(tree, e, method);
+                            default ->  throw new AssertionError();
+                            }
+                        }
+                    }
+                    }
+                });
+            }
+            if (!hasWriteReplace[0] &&
+                    (c.isValueClass() || hasAbstractValueSuperClass(c, Set.of(syms.numberType.tsym))) &&
+                    !c.isAbstract() && !c.isRecord() &&
+                    types.unboxedType(c.type) == Type.noType) {
+                // we need to check if the class is inheriting an appropriate writeReplace method
+                MethodSymbol ms = null;
+                Log.DiagnosticHandler discardHandler = new Log.DiscardDiagnosticHandler(log);
+                try {
+                    ms = rs.resolveInternalMethod(env.tree, env, c.type, names.writeReplace, List.nil(), List.nil());
+                } catch (FatalError fe) {
+                    // ignore no method was found
+                } finally {
+                    log.popDiagnosticHandler(discardHandler);
+                }
+                if (ms == null || !hasAppropriateWriteReplace(p, ms, false)) {
+                    log.warning(p.pos(),
+                            c.isValueClass() ? LintWarnings.SerializableValueClassWithoutWriteReplace1 :
+                                    LintWarnings.SerializableValueClassWithoutWriteReplace2);
+                }
+            }
+            return null;
         }
+
+        boolean canBeSerialized(Type type) {
+            return type.isPrimitive() || rs.isSerializable(type);
+        }
+
+        private boolean hasAbstractValueSuperClass(Symbol c, Set<Symbol> excluding) {
+            while (c.getKind() == ElementKind.CLASS) {
+                Type sup = ((ClassSymbol)c).getSuperclass();
+                if (!sup.hasTag(CLASS) || sup.isErroneous() ||
+                        sup.tsym == syms.objectType.tsym) {
+                    return false;
+                }
+                // if it is a value super class it has to be abstract
+                if (sup.isValueClass() && !excluding.contains(sup.tsym)) {
+                    return true;
+                }
+                c = sup.tsym;
+            }
+            return false;
+        }
+
+        /**
+         * Check that Externalizable class needs a public no-arg
+         * constructor.
+         *
+         * Check that a Serializable class has access to the no-arg
+         * constructor of its first nonserializable superclass.
+         */
+        private void checkCtorAccess(JCClassDecl tree, ClassSymbol c) {
+            if (isExternalizable(c.type)) {
+                for(var sym : c.getEnclosedElements()) {
+                    if (sym.isConstructor() &&
+                        ((sym.flags() & PUBLIC) == PUBLIC)) {
+                        if (((MethodSymbol)sym).getParameters().isEmpty()) {
+                            return;
+                        }
+                    }
+                }
+                log.warning(tree.pos(),
+                            LintWarnings.ExternalizableMissingPublicNoArgCtor);
+            } else {
+                // Approximate access to the no-arg constructor up in
+                // the superclass chain by checking that the
+                // constructor is not private. This may not handle
+                // some cross-package situations correctly.
+                Type superClass = c.getSuperclass();
+                // java.lang.Object is *not* Serializable so this loop
+                // should terminate.
+                while (rs.isSerializable(superClass) ) {
+                    try {
+                        superClass = (Type)((TypeElement)(((DeclaredType)superClass)).asElement()).getSuperclass();
+                    } catch(ClassCastException cce) {
+                        return ; // Don't try to recover
+                    }
+                }
+                // Non-Serializable superclass
+                try {
+                    ClassSymbol supertype = ((ClassSymbol)(((DeclaredType)superClass).asElement()));
+                    for(var sym : supertype.getEnclosedElements()) {
+                        if (sym.isConstructor()) {
+                            MethodSymbol ctor = (MethodSymbol)sym;
+                            if (ctor.getParameters().isEmpty()) {
+                                if (((ctor.flags() & PRIVATE) == PRIVATE) ||
+                                    // Handle nested classes and implicit this$0
+                                    (supertype.getNestingKind() == NestingKind.MEMBER &&
+                                     ((supertype.flags() & STATIC) == 0)))
+                                    log.warning(tree.pos(),
+                                                LintWarnings.SerializableMissingAccessNoArgCtor(supertype.getQualifiedName()));
+                            }
+                        }
+                    }
+                } catch (ClassCastException cce) {
+                    return ; // Don't try to recover
+                }
+                return;
+            }
+        }
+
+        private void checkSerialVersionUID(JCClassDecl tree, Element e, VarSymbol svuid) {
+            // To be effective, serialVersionUID must be marked static
+            // and final, but private is recommended. But alas, in
+            // practice there are many non-private serialVersionUID
+            // fields.
+             if ((svuid.flags() & (STATIC | FINAL)) !=
+                 (STATIC | FINAL)) {
+                 log.warning(
+                         TreeInfo.diagnosticPositionFor(svuid, tree),
+                             LintWarnings.ImproperSVUID((Symbol)e));
+             }
+
+             // check svuid has type long
+             if (!svuid.type.hasTag(LONG)) {
+                 log.warning(
+                         TreeInfo.diagnosticPositionFor(svuid, tree),
+                             LintWarnings.LongSVUID((Symbol)e));
+             }
+
+             if (svuid.getConstValue() == null)
+                 log.warning(
+                         TreeInfo.diagnosticPositionFor(svuid, tree),
+                             LintWarnings.ConstantSVUID((Symbol)e));
+        }
+
+        private void checkSerialPersistentFields(JCClassDecl tree, Element e, VarSymbol spf) {
+            // To be effective, serialPersisentFields must be private, static, and final.
+             if ((spf.flags() & (PRIVATE | STATIC | FINAL)) !=
+                 (PRIVATE | STATIC | FINAL)) {
+                 log.warning(
+                         TreeInfo.diagnosticPositionFor(spf, tree),
+                             LintWarnings.ImproperSPF);
+             }
+
+             if (!types.isSameType(spf.type, OSF_TYPE)) {
+                 log.warning(
+                         TreeInfo.diagnosticPositionFor(spf, tree),
+                             LintWarnings.OSFArraySPF);
+             }
+
+            if (isExternalizable((Type)(e.asType()))) {
+                log.warning(
+                        TreeInfo.diagnosticPositionFor(spf, tree),
+                            LintWarnings.IneffectualSerialFieldExternalizable);
+            }
+
+            // Warn if serialPersistentFields is initialized to a
+            // literal null.
+            JCTree spfDecl = TreeInfo.declarationFor(spf, tree);
+            if (spfDecl != null && spfDecl.getTag() == VARDEF) {
+                JCVariableDecl variableDef = (JCVariableDecl) spfDecl;
+                JCExpression initExpr = variableDef.init;
+                 if (initExpr != null && TreeInfo.isNull(initExpr)) {
+                     log.warning(initExpr.pos(),
+                                 LintWarnings.SPFNullInit);
+                 }
+            }
+        }
+
+        private void checkWriteObject(JCClassDecl tree, Element e, MethodSymbol method) {
+            // The "synchronized" modifier is seen in the wild on
+            // readObject and writeObject methods and is generally
+            // innocuous.
+
+            // private void writeObject(ObjectOutputStream stream) throws IOException
+            checkPrivateNonStaticMethod(tree, method);
+            isExpectedReturnType(tree, method, syms.voidType, true);
+            checkOneArg(tree, e, method, syms.objectOutputStreamType);
+            hasExpectedExceptions(tree, method, true, syms.ioExceptionType);
+            checkExternalizable(tree, e, method);
+        }
+
+        private boolean hasAppropriateWriteReplace(JCClassDecl tree, MethodSymbol method, boolean warn) {
+            // ANY-ACCESS-MODIFIER Object writeReplace() throws
+            // ObjectStreamException
+
+            // Excluding abstract, could have a more complicated
+            // rule based on abstract-ness of the class
+            return isConcreteInstanceMethod(tree, method, warn) &&
+                    isExpectedReturnType(tree, method, syms.objectType, warn) &&
+                    hasNoArgs(tree, method, warn) &&
+                    hasExpectedExceptions(tree, method, warn, syms.objectStreamExceptionType);
+        }
+
+        private void checkReadObject(JCClassDecl tree, Element e, MethodSymbol method) {
+            // The "synchronized" modifier is seen in the wild on
+            // readObject and writeObject methods and is generally
+            // innocuous.
+
+            // private void readObject(ObjectInputStream stream)
+            //   throws IOException, ClassNotFoundException
+            checkPrivateNonStaticMethod(tree, method);
+            isExpectedReturnType(tree, method, syms.voidType, true);
+            checkOneArg(tree, e, method, syms.objectInputStreamType);
+            hasExpectedExceptions(tree, method, true, syms.ioExceptionType, syms.classNotFoundExceptionType);
+            checkExternalizable(tree, e, method);
+        }
+
+        private void checkReadObjectNoData(JCClassDecl tree, Element e, MethodSymbol method) {
+            // private void readObjectNoData() throws ObjectStreamException
+            checkPrivateNonStaticMethod(tree, method);
+            isExpectedReturnType(tree, method, syms.voidType, true);
+            hasNoArgs(tree, method, true);
+            hasExpectedExceptions(tree, method, true, syms.objectStreamExceptionType);
+            checkExternalizable(tree, e, method);
+        }
+
+        private void checkReadResolve(JCClassDecl tree, Element e, MethodSymbol method) {
+            // ANY-ACCESS-MODIFIER Object readResolve()
+            // throws ObjectStreamException
+
+            // Excluding abstract, could have a more complicated
+            // rule based on abstract-ness of the class
+            isConcreteInstanceMethod(tree, method, true);
+            isExpectedReturnType(tree, method, syms.objectType, true);
+            hasNoArgs(tree, method, true);
+            hasExpectedExceptions(tree, method, true, syms.objectStreamExceptionType);
+        }
+
+        private void checkWriteExternalRecord(JCClassDecl tree, Element e, MethodSymbol method, boolean isExtern) {
+            //public void writeExternal(ObjectOutput) throws IOException
+            checkExternMethodRecord(tree, e, method, syms.objectOutputType, isExtern);
+        }
+
+        private void checkReadExternalRecord(JCClassDecl tree, Element e, MethodSymbol method, boolean isExtern) {
+            // public void readExternal(ObjectInput) throws IOException
+            checkExternMethodRecord(tree, e, method, syms.objectInputType, isExtern);
+         }
+
+        private void checkExternMethodRecord(JCClassDecl tree, Element e, MethodSymbol method, Type argType,
+                                             boolean isExtern) {
+            if (isExtern && isExternMethod(tree, e, method, argType)) {
+                log.warning(
+                        TreeInfo.diagnosticPositionFor(method, tree),
+                            LintWarnings.IneffectualExternalizableMethodRecord(method.getSimpleName().toString()));
+            }
+        }
+
+        void checkPrivateNonStaticMethod(JCClassDecl tree, MethodSymbol method) {
+            var flags = method.flags();
+            if ((flags & PRIVATE) == 0) {
+                log.warning(
+                        TreeInfo.diagnosticPositionFor(method, tree),
+                            LintWarnings.SerialMethodNotPrivate(method.getSimpleName()));
+            }
+
+            if ((flags & STATIC) != 0) {
+                log.warning(
+                        TreeInfo.diagnosticPositionFor(method, tree),
+                            LintWarnings.SerialMethodStatic(method.getSimpleName()));
+            }
+        }
+
+        /**
+         * Per section 1.12 "Serialization of Enum Constants" of
+         * the serialization specification, due to the special
+         * serialization handling of enums, any writeObject,
+         * readObject, writeReplace, and readResolve methods are
+         * ignored as are serialPersistentFields and
+         * serialVersionUID fields.
+         */
+        @Override
+        public Void visitTypeAsEnum(TypeElement e,
+                                    JCClassDecl p) {
+            boolean isExtern = isExternalizable((Type)e.asType());
+            for(Element el : e.getEnclosedElements()) {
+                runUnderLint(el, p, (enclosed, tree) -> {
+                    String name = enclosed.getSimpleName().toString();
+                    switch(enclosed.getKind()) {
+                    case FIELD -> {
+                        var field = (VarSymbol)enclosed;
+                        if (serialFieldNames.contains(name)) {
+                            log.warning(
+                                    TreeInfo.diagnosticPositionFor(field, tree),
+                                        LintWarnings.IneffectualSerialFieldEnum(name));
+                        }
+                    }
+
+                    case METHOD -> {
+                        var method = (MethodSymbol)enclosed;
+                        if (serialMethodNames.contains(name)) {
+                            log.warning(
+                                    TreeInfo.diagnosticPositionFor(method, tree),
+                                        LintWarnings.IneffectualSerialMethodEnum(name));
+                        }
+
+                        if (isExtern) {
+                            switch(name) {
+                            case "writeExternal" -> checkWriteExternalEnum(tree, e, method);
+                            case "readExternal"  -> checkReadExternalEnum(tree, e, method);
+                            }
+                        }
+                    }
+
+                    // Also perform checks on any class bodies of enum constants, see JLS 8.9.1.
+                    case ENUM_CONSTANT -> {
+                        var field = (VarSymbol)enclosed;
+                        JCVariableDecl decl = (JCVariableDecl) TreeInfo.declarationFor(field, p);
+                        if (decl.init instanceof JCNewClass nc && nc.def != null) {
+                            ClassSymbol enumConstantType = nc.def.sym;
+                            visitTypeAsEnum(enumConstantType, p);
+                        }
+                    }
+
+                    }});
+            }
+            return null;
+        }
+
+        private void checkWriteExternalEnum(JCClassDecl tree, Element e, MethodSymbol method) {
+            //public void writeExternal(ObjectOutput) throws IOException
+            checkExternMethodEnum(tree, e, method, syms.objectOutputType);
+        }
+
+        private void checkReadExternalEnum(JCClassDecl tree, Element e, MethodSymbol method) {
+             // public void readExternal(ObjectInput) throws IOException
+            checkExternMethodEnum(tree, e, method, syms.objectInputType);
+         }
+
+        private void checkExternMethodEnum(JCClassDecl tree, Element e, MethodSymbol method, Type argType) {
+            if (isExternMethod(tree, e, method, argType)) {
+                log.warning(
+                        TreeInfo.diagnosticPositionFor(method, tree),
+                            LintWarnings.IneffectualExternMethodEnum(method.getSimpleName().toString()));
+            }
+        }
+
+        private boolean isExternMethod(JCClassDecl tree, Element e, MethodSymbol method, Type argType) {
+            long flags = method.flags();
+            Type rtype = method.getReturnType();
+
+            // Not necessary to check throws clause in this context
+            return (flags & PUBLIC) != 0 && (flags & STATIC) == 0 &&
+                types.isSameType(syms.voidType, rtype) &&
+                hasExactlyOneArgWithType(tree, e, method, argType);
+        }
+
+        /**
+         * Most serialization-related fields and methods on interfaces
+         * are ineffectual or problematic.
+         */
+        @Override
+        public Void visitTypeAsInterface(TypeElement e,
+                                         JCClassDecl p) {
+            for(Element el : e.getEnclosedElements()) {
+                runUnderLint(el, p, (enclosed, tree) -> {
+                    String name = null;
+                    switch(enclosed.getKind()) {
+                    case FIELD -> {
+                        var field = (VarSymbol)enclosed;
+                        name = field.getSimpleName().toString();
+                        switch(name) {
+                        case "serialPersistentFields" -> {
+                            log.warning(
+                                    TreeInfo.diagnosticPositionFor(field, tree),
+                                        LintWarnings.IneffectualSerialFieldInterface);
+                        }
+
+                        case "serialVersionUID" -> {
+                            checkSerialVersionUID(tree, e, field);
+                        }
+                        }
+                    }
+
+                    case METHOD -> {
+                        var method = (MethodSymbol)enclosed;
+                        name = enclosed.getSimpleName().toString();
+                        if (serialMethodNames.contains(name)) {
+                            switch (name) {
+                            case
+                                "readObject",
+                                "readObjectNoData",
+                                "writeObject"      -> checkPrivateMethod(tree, e, method);
+
+                            case
+                                "writeReplace",
+                                "readResolve"      -> checkDefaultIneffective(tree, e, method);
+
+                            default ->  throw new AssertionError();
+                            }
+
+                        }
+                    }}
+                });
+            }
+
+            return null;
+        }
+
+        private void checkPrivateMethod(JCClassDecl tree,
+                                        Element e,
+                                        MethodSymbol method) {
+            if ((method.flags() & PRIVATE) == 0) {
+                log.warning(
+                        TreeInfo.diagnosticPositionFor(method, tree),
+                            LintWarnings.NonPrivateMethodWeakerAccess);
+            }
+        }
+
+        private void checkDefaultIneffective(JCClassDecl tree,
+                                             Element e,
+                                             MethodSymbol method) {
+            if ((method.flags() & DEFAULT) == DEFAULT) {
+                log.warning(
+                        TreeInfo.diagnosticPositionFor(method, tree),
+                            LintWarnings.DefaultIneffective);
+
+            }
+        }
+
+        @Override
+        public Void visitTypeAsAnnotationType(TypeElement e,
+                                              JCClassDecl p) {
+            // Per the JLS, annotation types are not serializeable
+            return null;
+        }
+
+        /**
+         * From the Java Object Serialization Specification, 1.13
+         * Serialization of Records:
+         *
+         * "The process by which record objects are serialized or
+         * externalized cannot be customized; any class-specific
+         * writeObject, readObject, readObjectNoData, writeExternal,
+         * and readExternal methods defined by record classes are
+         * ignored during serialization and deserialization. However,
+         * a substitute object to be serialized or a designate
+         * replacement may be specified, by the writeReplace and
+         * readResolve methods, respectively. Any
+         * serialPersistentFields field declaration is
+         * ignored. Documenting serializable fields and data for
+         * record classes is unnecessary, since there is no variation
+         * in the serial form, other than whether a substitute or
+         * replacement object is used. The serialVersionUID of a
+         * record class is 0L unless explicitly declared. The
+         * requirement for matching serialVersionUID values is waived
+         * for record classes."
+         */
+        @Override
+        public Void visitTypeAsRecord(TypeElement e,
+                                      JCClassDecl p) {
+            boolean isExtern = isExternalizable((Type)e.asType());
+            for(Element el : e.getEnclosedElements()) {
+                runUnderLint(el, p, (enclosed, tree) -> {
+                    String name = enclosed.getSimpleName().toString();
+                    switch(enclosed.getKind()) {
+                    case FIELD -> {
+                        var field = (VarSymbol)enclosed;
+                        switch(name) {
+                        case "serialPersistentFields" -> {
+                            log.warning(
+                                    TreeInfo.diagnosticPositionFor(field, tree),
+                                        LintWarnings.IneffectualSerialFieldRecord);
+                        }
+
+                        case "serialVersionUID" -> {
+                            // Could generate additional warning that
+                            // svuid value is not checked to match for
+                            // records.
+                            checkSerialVersionUID(tree, e, field);
+                        }}
+                    }
+
+                    case METHOD -> {
+                        var method = (MethodSymbol)enclosed;
+                        switch(name) {
+                        case "writeReplace" -> hasAppropriateWriteReplace(tree, method, true);
+                        case "readResolve"  -> checkReadResolve(tree, e, method);
+
+                        case "writeExternal" -> checkWriteExternalRecord(tree, e, method, isExtern);
+                        case "readExternal"  -> checkReadExternalRecord(tree, e, method, isExtern);
+
+                        default -> {
+                            if (serialMethodNames.contains(name)) {
+                                log.warning(
+                                        TreeInfo.diagnosticPositionFor(method, tree),
+                                            LintWarnings.IneffectualSerialMethodRecord(name));
+                            }
+                        }}
+                    }}});
+            }
+            return null;
+        }
+
+        boolean isConcreteInstanceMethod(JCClassDecl tree,
+                                         MethodSymbol method,
+                                         boolean warn) {
+            if ((method.flags() & (STATIC | ABSTRACT)) != 0) {
+                if (warn) {
+                    log.warning(
+                            TreeInfo.diagnosticPositionFor(method, tree),
+                                LintWarnings.SerialConcreteInstanceMethod(method.getSimpleName()));
+                }
+                return false;
+            }
+            return true;
+        }
+
+        private boolean isExpectedReturnType(JCClassDecl tree,
+                                          MethodSymbol method,
+                                          Type expectedReturnType,
+                                          boolean warn) {
+            // Note: there may be complications checking writeReplace
+            // and readResolve since they return Object and could, in
+            // principle, have covariant overrides and any synthetic
+            // bridge method would not be represented here for
+            // checking.
+            Type rtype = method.getReturnType();
+            if (!types.isSameType(expectedReturnType, rtype)) {
+                if (warn) {
+                    log.warning(
+                            TreeInfo.diagnosticPositionFor(method, tree),
+                            LintWarnings.SerialMethodUnexpectedReturnType(method.getSimpleName(),
+                                                                      rtype, expectedReturnType));
+                }
+                return false;
+            }
+            return true;
+        }
+
+        private void checkOneArg(JCClassDecl tree,
+                                 Element enclosing,
+                                 MethodSymbol method,
+                                 Type expectedType) {
+            String name = method.getSimpleName().toString();
+
+            var parameters= method.getParameters();
+
+            if (parameters.size() != 1) {
+                log.warning(
+                        TreeInfo.diagnosticPositionFor(method, tree),
+                            LintWarnings.SerialMethodOneArg(method.getSimpleName(), parameters.size()));
+                return;
+            }
+
+            Type parameterType = parameters.get(0).asType();
+            if (!types.isSameType(parameterType, expectedType)) {
+                log.warning(
+                        TreeInfo.diagnosticPositionFor(method, tree),
+                            LintWarnings.SerialMethodParameterType(method.getSimpleName(),
+                                                               expectedType,
+                                                               parameterType));
+            }
+        }
+
+        private boolean hasExactlyOneArgWithType(JCClassDecl tree,
+                                                 Element enclosing,
+                                                 MethodSymbol method,
+                                                 Type expectedType) {
+            var parameters = method.getParameters();
+            return (parameters.size() == 1) &&
+                types.isSameType(parameters.get(0).asType(), expectedType);
+        }
+
+
+        boolean hasNoArgs(JCClassDecl tree, MethodSymbol method, boolean warn) {
+            var parameters = method.getParameters();
+            if (!parameters.isEmpty()) {
+                if (warn) {
+                    log.warning(
+                            TreeInfo.diagnosticPositionFor(parameters.get(0), tree),
+                            LintWarnings.SerialMethodNoArgs(method.getSimpleName()));
+                }
+                return false;
+            }
+            return true;
+        }
+
+        private void checkExternalizable(JCClassDecl tree, Element enclosing, MethodSymbol method) {
+            // If the enclosing class is externalizable, warn for the method
+            if (isExternalizable((Type)enclosing.asType())) {
+                log.warning(
+                        TreeInfo.diagnosticPositionFor(method, tree),
+                            LintWarnings.IneffectualSerialMethodExternalizable(method.getSimpleName()));
+            }
+            return;
+        }
+
+        private boolean hasExpectedExceptions(JCClassDecl tree,
+                                              MethodSymbol method,
+                                              boolean warn,
+                                              Type... declaredExceptions) {
+            for (Type thrownType: method.getThrownTypes()) {
+                // For each exception in the throws clause of the
+                // method, if not an Error and not a RuntimeException,
+                // check if the exception is a subtype of a declared
+                // exception from the throws clause of the
+                // serialization method in question.
+                if (types.isSubtype(thrownType, syms.runtimeExceptionType) ||
+                    types.isSubtype(thrownType, syms.errorType) ) {
+                    continue;
+                } else {
+                    boolean declared = false;
+                    for (Type declaredException : declaredExceptions) {
+                        if (types.isSubtype(thrownType, declaredException)) {
+                            declared = true;
+                            continue;
+                        }
+                    }
+                    if (!declared) {
+                        if (warn) {
+                            log.warning(
+                                    TreeInfo.diagnosticPositionFor(method, tree),
+                                    LintWarnings.SerialMethodUnexpectedException(method.getSimpleName(),
+                                                                             thrownType));
+                        }
+                        return false;
+                    }
+                }
+            }
+            return true;
+        }
+
+        private <E extends Element> Void runUnderLint(E symbol, JCClassDecl p, BiConsumer<E, JCClassDecl> task) {
+            Lint prevLint = lint;
+            try {
+                lint = lint.augment((Symbol) symbol);
+
+                if (lint.isEnabled(LintCategory.SERIAL)) {
+                    task.accept(symbol, p);
+                }
+
+                return null;
+            } finally {
+                lint = prevLint;
+            }
+        }
+
     }
+
 }

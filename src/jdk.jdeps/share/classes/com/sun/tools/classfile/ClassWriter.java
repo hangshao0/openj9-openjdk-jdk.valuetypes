@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2008, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -474,12 +474,6 @@ public class ClassWriter {
             return null;
         }
 
-        @Override
-        public Void visitJavaFlags(JavaFlags_attribute attr, ClassOutputStream out) {
-            out.writeShort(attr.extendedFlags);
-            return null;
-        }
-
         protected void writeInnerClassesInfo(InnerClasses_attribute.Info info, ClassOutputStream out) {
             out.writeShort(info.inner_class_info_index);
             out.writeShort(info.outer_class_info_index);
@@ -739,7 +733,7 @@ public class ClassWriter {
                 stackMapWriter = new StackMapTableWriter();
 
             out.writeShort(attr.entries.length);
-            for (stack_map_frame f: attr.entries)
+            for (stack_map_entry f: attr.entries)
                 stackMapWriter.write(f, out);
             return null;
         }
@@ -750,13 +744,21 @@ public class ClassWriter {
                 stackMapWriter = new StackMapTableWriter();
 
             out.writeShort(attr.entries.length);
-            for (stack_map_frame f: attr.entries)
+            for (stack_map_entry f: attr.entries)
                 stackMapWriter.write(f, out);
             return null;
         }
 
         @Override
         public Void visitSynthetic(Synthetic_attribute attr, ClassOutputStream out) {
+            return null;
+        }
+
+        @Override
+        public Void visitLoadableDescriptors(LoadableDescriptors_attribute attr, ClassOutputStream out) {
+            out.writeShort(attr.descriptors.length);
+            for (int index: attr.descriptors)
+                out.writeShort(index);
             return null;
         }
 
@@ -771,10 +773,10 @@ public class ClassWriter {
      * Writer for the frames of StackMap and StackMapTable attributes.
      */
     protected static class StackMapTableWriter
-            implements stack_map_frame.Visitor<Void,ClassOutputStream> {
+            implements stack_map_entry.Visitor<Void,ClassOutputStream> {
 
-        public void write(stack_map_frame frame, ClassOutputStream out) {
-            out.write(frame.frame_type);
+        public void write(stack_map_entry frame, ClassOutputStream out) {
+            out.write(frame.entry_type);
             frame.accept(this, out);
         }
 
@@ -825,6 +827,15 @@ public class ClassWriter {
             out.writeShort(frame.stack.length);
             for (verification_type_info s: frame.stack)
                 writeVerificationTypeInfo(s, out);
+            return null;
+        }
+
+        @Override
+        public Void visit_assert_unset_fields(assert_unset_fields frame, ClassOutputStream out) {
+            out.writeShort(frame.number_of_unset_fields);
+            for (int uf: frame.unset_fields) {
+                out.writeShort(uf);
+            }
             return null;
         }
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2005, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2005, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,7 +26,6 @@
 package com.sun.source.util;
 
 import com.sun.source.tree.*;
-import jdk.internal.javac.PreviewFeature;
 
 /**
  * A TreeVisitor that visits all the child tree nodes.
@@ -305,22 +304,6 @@ public class TreeScanner<R,P> implements TreeVisitor<R,P> {
     }
 
     /**
-     * {@inheritDoc}
-     *
-     * @implSpec This implementation scans the children in left to right order.
-     *
-     * @param node  {@inheritDoc}
-     * @param p  {@inheritDoc}
-     * @return the result of scanning
-     */
-    @Override
-    public R visitWithField(WithFieldTree node, P p) {
-        R r = scan(node.getField(), p);
-        r = scanAndReduce(node.getValue(), p, r);
-        return r;
-    }
-
-    /**
      * {@inheritDoc} This implementation scans the children in left to right order.
      *
      * @param node  {@inheritDoc}
@@ -391,6 +374,8 @@ public class TreeScanner<R,P> implements TreeVisitor<R,P> {
      * @param node  {@inheritDoc}
      * @param p  {@inheritDoc}
      * @return the result of scanning
+     *
+     * @since 14
      */
     @Override
     public R visitSwitchExpression(SwitchExpressionTree node, P p) {
@@ -410,7 +395,8 @@ public class TreeScanner<R,P> implements TreeVisitor<R,P> {
      */
     @Override
     public R visitCase(CaseTree node, P p) {
-        R r = scan(node.getExpressions(), p);
+        R r = scan(node.getLabels(), p);
+        r = scanAndReduce(node.getGuard(), p, r);
         if (node.getCaseKind() == CaseTree.CaseKind.RULE)
             r = scanAndReduce(node.getBody(), p, r);
         else
@@ -422,18 +408,6 @@ public class TreeScanner<R,P> implements TreeVisitor<R,P> {
      * {@inheritDoc}
      *
      * @implSpec This implementation scans the children in left to right order.
-     *
-     * @param node  {@inheritDoc}
-     * @param p  {@inheritDoc}
-     * @return the result of scanning
-     */
-    @Override
-    public R visitDefaultValue(DefaultValueTree node, P p) {
-        return scan(node.getType(), p);
-    }
-
-    /**
-     * {@inheritDoc} This implementation scans the children in left to right order.
      *
      * @param node  {@inheritDoc}
      * @param p  {@inheritDoc}
@@ -788,6 +762,21 @@ public class TreeScanner<R,P> implements TreeVisitor<R,P> {
     /**
      * {@inheritDoc}
      *
+     * @implSpec This implementation returns {@code null}.
+     *
+     * @param node  {@inheritDoc}
+     * @param p  {@inheritDoc}
+     * @return the result of scanning
+     * @since 21
+     */
+    @Override
+    public R visitAnyPattern(AnyPatternTree node, P p) {
+        return null;
+    }
+
+    /**
+     * {@inheritDoc}
+     *
      * @implSpec This implementation scans the children in left to right order.
      *
      * @param node  {@inheritDoc}
@@ -808,10 +797,9 @@ public class TreeScanner<R,P> implements TreeVisitor<R,P> {
      * @param node  {@inheritDoc}
      * @param p  {@inheritDoc}
      * @return the result of scanning
-     * @since 17
+     * @since 21
      */
     @Override
-    @PreviewFeature(feature=PreviewFeature.Feature.SWITCH_PATTERN_MATCHING, reflective=true)
     public R visitDefaultCaseLabel(DefaultCaseLabelTree node, P p) {
         return null;
     }
@@ -819,7 +807,52 @@ public class TreeScanner<R,P> implements TreeVisitor<R,P> {
     /**
      * {@inheritDoc}
      *
+     * @implSpec This implementation returns {@code null}.
+     *
+     * @param node  {@inheritDoc}
+     * @param p  {@inheritDoc}
+     * @return the result of scanning
+     * @since 21
+     */
+    @Override
+    public R visitConstantCaseLabel(ConstantCaseLabelTree node, P p) {
+        return scan(node.getConstantExpression(), p);
+    }
+
+    /**
+     * {@inheritDoc}
+     *
+     * @implSpec This implementation returns {@code null}.
+     *
+     * @param node  {@inheritDoc}
+     * @param p  {@inheritDoc}
+     * @return the result of scanning
+     * @since 21
+     */
+    @Override
+    public R visitPatternCaseLabel(PatternCaseLabelTree node, P p) {
+        return scan(node.getPattern(), p);
+    }
+
+    /**
+     * {@inheritDoc}
+     *
      * @implSpec This implementation scans the children in left to right order.
+     *
+     * @param node  {@inheritDoc}
+     * @param p  {@inheritDoc}
+     * @return the result of scanning
+     * @since 21
+     */
+    @Override
+    public R visitDeconstructionPattern(DeconstructionPatternTree node, P p) {
+        R r = scan(node.getDeconstructor(), p);
+        r = scanAndReduce(node.getNestedPatterns(), p, r);
+        return r;
+    }
+
+    /**
+     * {@inheritDoc} This implementation scans the children in left to right order.
      *
      * @param node  {@inheritDoc}
      * @param p  {@inheritDoc}
@@ -844,39 +877,6 @@ public class TreeScanner<R,P> implements TreeVisitor<R,P> {
     @Override
     public R visitMemberSelect(MemberSelectTree node, P p) {
         return scan(node.getExpression(), p);
-    }
-
-    /**
-     * {@inheritDoc}
-     *
-     * @implSpec This implementation scans the children in left to right order.
-     *
-     * @param node  {@inheritDoc}
-     * @param p  {@inheritDoc}
-     * @return the result of scanning
-     * @since 17
-     */
-    @Override
-    @PreviewFeature(feature=PreviewFeature.Feature.SWITCH_PATTERN_MATCHING, reflective=true)
-    public R visitParenthesizedPattern(ParenthesizedPatternTree node, P p) {
-        return scan(node.getPattern(), p);
-    }
-
-    /**
-     * {@inheritDoc}
-     *
-     * @implSpec This implementation scans the children in left to right order.
-     *
-     * @param node  {@inheritDoc}
-     * @param p  {@inheritDoc}
-     * @return the result of scanning
-     * @since 17
-     */
-    @Override
-    @PreviewFeature(feature=PreviewFeature.Feature.SWITCH_PATTERN_MATCHING, reflective=true)
-    public R visitGuardedPattern(GuardedPatternTree node, P p) {
-        R r = scan(node.getPattern(), p);
-        return scanAndReduce(node.getExpression(), p, r);
     }
 
     /**
@@ -1200,6 +1200,8 @@ public class TreeScanner<R,P> implements TreeVisitor<R,P> {
      * @param node  {@inheritDoc}
      * @param p  {@inheritDoc}
      * @return the result of scanning
+     *
+     * @since 14
      */
     @Override
     public R visitYield(YieldTree node, P p) {

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2019, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -28,10 +28,13 @@
  *          the archived class with the same name is not loaded.
  * @requires vm.cds
  * @library /test/lib
- * @compile test-classes/RewriteBytecodesInline.java test-classes/Util.java test-classes/Point.java test-classes/WithInlinedField.java
- * @build sun.hotspot.WhiteBox
- * @run driver jdk.test.lib.helpers.ClassFileInstaller sun.hotspot.WhiteBox
- * @run driver RewriteBytecodesInlineTest
+ * @enablePreview
+ * @modules java.base/jdk.internal.value
+ *          java.base/jdk.internal.vm.annotation
+ * @compile test-classes/RewriteBytecodesInline.java test-classes/Util.java test-classes/Point.java test-classes/WithInlinedField.java RewriteBytecodesInlineTest.java
+ * @build jdk.test.whitebox.WhiteBox
+ * @run driver jdk.test.lib.helpers.ClassFileInstaller jdk.test.whitebox.WhiteBox
+ * @run main/othervm RewriteBytecodesInlineTest
  */
 
 import java.io.File;
@@ -39,7 +42,7 @@ import jdk.test.lib.process.OutputAnalyzer;
 
 public class RewriteBytecodesInlineTest {
   public static void main(String[] args) throws Exception {
-    String wbJar = JarBuilder.build(true, "WhiteBox", "sun/hotspot/WhiteBox");
+    String wbJar = JarBuilder.build(true, "WhiteBox", "jdk/test/whitebox/WhiteBox");
     String use_whitebox_jar = "-Xbootclasspath/a:" + wbJar;
 
     String appJar = JarBuilder.build("dynamic_define", "RewriteBytecodesInline", "Util", "Point", "WithInlinedField");
@@ -47,10 +50,12 @@ public class RewriteBytecodesInlineTest {
 
     TestCommon.dump(appJar, TestCommon.list("RewriteBytecodesInline", "Point", "WithInlinedField"),
                     // command-line arguments ...
-                    use_whitebox_jar);
+                    use_whitebox_jar,
+                    "--enable-preview");
 
     OutputAnalyzer output = TestCommon.exec(appJar,
                     // command-line arguments ...
+                    "--enable-preview",
                     use_whitebox_jar,
                     "-XX:+UnlockDiagnosticVMOptions",
                     "-XX:+WhiteBoxAPI",

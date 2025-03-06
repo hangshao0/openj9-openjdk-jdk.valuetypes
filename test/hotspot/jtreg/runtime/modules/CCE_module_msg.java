@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016, 2022, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -27,9 +27,9 @@
  * @library /test/lib
  * @compile p2/c2.java
  * @compile p4/c4.java
- * @build sun.hotspot.WhiteBox
+ * @build jdk.test.whitebox.WhiteBox
  * @compile/module=java.base java/lang/ModuleHelper.java
- * @run driver jdk.test.lib.helpers.ClassFileInstaller sun.hotspot.WhiteBox
+ * @run driver jdk.test.lib.helpers.ClassFileInstaller jdk.test.whitebox.WhiteBox
  * @run main/othervm -Xbootclasspath/a:. -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI CCE_module_msg
  */
 
@@ -59,7 +59,7 @@ public class CCE_module_msg {
     }
 
     public static void invalidObjectToDerived() {
-        java.lang.Object instance = java.util.Objects.newIdentity();
+        java.lang.Object instance = new java.lang.Object();
         int left = 23;
         int right = 42;
         try {
@@ -69,7 +69,7 @@ public class CCE_module_msg {
             throw new RuntimeException("ClassCastException wasn't thrown, test failed.");
         } catch (ClassCastException cce) {
             System.out.println(cce.toString());
-            if (!cce.getMessage().contains("class java.util.Objects$1 cannot be cast to class Derived (java.util.Objects$1 is in module java.base of loader 'bootstrap'; Derived is in unnamed module of loader 'app')")) {
+            if (!cce.getMessage().contains("class java.lang.Object cannot be cast to class Derived (java.lang.Object is in module java.base of loader 'bootstrap'; Derived is in unnamed module of loader 'app')")) {
                 throw new RuntimeException("Wrong message: " + cce.getMessage());
             }
         }

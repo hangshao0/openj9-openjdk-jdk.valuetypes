@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,6 +24,8 @@
  */
 package jdk.jpackage.internal;
 
+import jdk.internal.util.OperatingSystem;
+
 import java.io.IOException;
 import java.io.Reader;
 import java.nio.file.Files;
@@ -38,9 +40,6 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Properties;
 import java.util.ResourceBundle;
-import java.util.jar.Attributes;
-import java.util.jar.JarFile;
-import java.util.jar.Manifest;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -90,9 +89,6 @@ public class Arguments {
 
     private List<CLIOptions> allOptions = null;
 
-    private String input = null;
-    private Path output = null;
-
     private boolean hasMainJar = false;
     private boolean hasMainClass = false;
     private boolean hasMainModule = false;
@@ -136,9 +132,6 @@ public class Arguments {
         allOptions = new ArrayList<>();
 
         addLaunchers = new ArrayList<>();
-
-        output = Paths.get("").toAbsolutePath();
-        deployParams.setOutput(output);
     }
 
     // CLIOptions is public for DeployParamsTest
@@ -148,13 +141,12 @@ public class Arguments {
         }),
 
         INPUT ("input", "i", OptionCategories.PROPERTY, () -> {
-            context().input = popArg();
-            setOptionValue("input", context().input);
+            setOptionValue("input", popArg());
         }),
 
         OUTPUT ("dest", "d", OptionCategories.PROPERTY, () -> {
-            context().output = Path.of(popArg());
-            context().deployParams.setOutput(context().output);
+            var path = Path.of(popArg());
+            setOptionValue("dest", path);
         }),
 
         DESCRIPTION ("description", OptionCategories.PROPERTY),
@@ -177,6 +169,11 @@ public class Arguments {
                 OptionCategories.PROPERTY, () -> {
             String resourceDir = popArg();
             setOptionValue("resource-dir", resourceDir);
+        }),
+
+        DMG_CONTENT ("mac-dmg-content", OptionCategories.PROPERTY, () -> {
+            List<String> content = getArgumentList(popArg());
+            content.forEach(a -> setOptionValue("mac-dmg-content", a));
         }),
 
         ARGUMENTS ("arguments", OptionCategories.PROPERTY, () -> {
@@ -204,6 +201,11 @@ public class Arguments {
         JAVA_OPTIONS ("java-options", OptionCategories.PROPERTY, () -> {
             List<String> args = getArgumentList(popArg());
             args.forEach(a -> setOptionValue("java-options", a));
+        }),
+
+        APP_CONTENT ("app-content", OptionCategories.PROPERTY, () -> {
+            getArgumentList(popArg()).forEach(
+                    a -> setOptionValue("app-content", a));
         }),
 
         FILE_ASSOCIATIONS ("file-associations",
@@ -304,6 +306,10 @@ public class Arguments {
 
         MODULE_PATH ("module-path", "p", OptionCategories.MODULAR),
 
+        LAUNCHER_AS_SERVICE ("launcher-as-service", OptionCategories.PROPERTY, () -> {
+            setOptionValue("launcher-as-service", true);
+        }),
+
         MAC_SIGN ("mac-sign", "s", OptionCategories.PLATFORM_MAC, () -> {
             setOptionValue("mac-sign", true);
         }),
@@ -323,6 +329,12 @@ public class Arguments {
                     OptionCategories.PLATFORM_MAC),
 
         MAC_SIGNING_KEY_NAME ("mac-signing-key-user-name",
+                    OptionCategories.PLATFORM_MAC),
+
+        MAC_APP_IMAGE_SIGN_IDENTITY ("mac-app-image-sign-identity",
+                    OptionCategories.PLATFORM_MAC),
+
+        MAC_INSTALLER_SIGN_IDENTITY ("mac-installer-sign-identity",
                     OptionCategories.PLATFORM_MAC),
 
         MAC_SIGNING_KEYCHAIN ("mac-signing-keychain",
@@ -493,15 +505,6 @@ public class Arguments {
                 }
             }
 
-            if (hasMainJar && !hasMainClass) {
-                // try to get main-class from manifest
-                String mainClass = getMainClassFromManifest();
-                if (mainClass != null) {
-                    CLIOptions.setOptionValue(
-                            CLIOptions.APPCLASS.getId(), mainClass);
-                }
-            }
-
             // display error for arguments that are not supported
             // for current configuration.
 
@@ -576,6 +579,7 @@ public class Arguments {
         boolean hasRuntime = allOptions.contains(
                 CLIOptions.PREDEFINED_RUNTIME_IMAGE);
         boolean installerOnly = !imageOnly && hasAppImage;
+        boolean isMac = OperatingSystem.isMacOS();
         runtimeInstaller = !imageOnly && hasRuntime && !hasAppImage &&
                 !hasMainModule && !hasMainJar;
 
@@ -585,10 +589,16 @@ public class Arguments {
                 throw new PackagerException("ERR_UnsupportedOption",
                         option.getIdWithPrefix());
             }
-            if (imageOnly) {
+            if ((imageOnly && !isMac) || (imageOnly && !hasAppImage && isMac)) {
                 if (!ValidOptions.checkIfImageSupported(option)) {
                     throw new PackagerException("ERR_InvalidTypeOption",
                         option.getIdWithPrefix(), type);
+                }
+            } else if (imageOnly && hasAppImage && isMac) { // Signing app image
+                if (!ValidOptions.checkIfSigningSupported(option)) {
+                    throw new PackagerException(
+                            "ERR_InvalidOptionWithAppImageSigning",
+                            option.getIdWithPrefix());
                 }
             } else if (installerOnly || runtimeInstaller) {
                 if (!ValidOptions.checkIfInstallerSupported(option)) {
@@ -620,11 +630,34 @@ public class Arguments {
                         CLIOptions.JLINK_OPTIONS.getIdWithPrefix());
             }
         }
+        if (allOptions.contains(CLIOptions.MAC_SIGNING_KEY_NAME) &&
+            allOptions.contains(CLIOptions.MAC_APP_IMAGE_SIGN_IDENTITY)) {
+                throw new PackagerException("ERR_MutuallyExclusiveOptions",
+                        CLIOptions.MAC_SIGNING_KEY_NAME.getIdWithPrefix(),
+                        CLIOptions.MAC_APP_IMAGE_SIGN_IDENTITY.getIdWithPrefix());
+        }
+        if (allOptions.contains(CLIOptions.MAC_SIGNING_KEY_NAME) &&
+            allOptions.contains(CLIOptions.MAC_INSTALLER_SIGN_IDENTITY)) {
+                throw new PackagerException("ERR_MutuallyExclusiveOptions",
+                        CLIOptions.MAC_SIGNING_KEY_NAME.getIdWithPrefix(),
+                        CLIOptions.MAC_INSTALLER_SIGN_IDENTITY.getIdWithPrefix());
+        }
+        if (isMac && (imageOnly || "dmg".equals(type)) &&
+            allOptions.contains(CLIOptions.MAC_INSTALLER_SIGN_IDENTITY)) {
+                throw new PackagerException("ERR_InvalidTypeOption",
+                        CLIOptions.MAC_INSTALLER_SIGN_IDENTITY.getIdWithPrefix(),
+                        type);
+        }
+        if (allOptions.contains(CLIOptions.DMG_CONTENT)
+                && !("dmg".equals(type))) {
+            throw new PackagerException("ERR_InvalidTypeOption",
+                    CLIOptions.DMG_CONTENT.getIdWithPrefix(), ptype);
+        }
         if (hasMainJar && hasMainModule) {
             throw new PackagerException("ERR_BothMainJarAndModule");
         }
-        if (imageOnly && !hasMainJar && !hasMainModule) {
-            throw new PackagerException("ERR_NoEntryPoint");
+        if (imageOnly && !hasAppImage && !hasMainJar && !hasMainModule) {
+                throw new PackagerException("ERR_NoEntryPoint");
         }
     }
 
@@ -671,7 +704,8 @@ public class Arguments {
         Map<String, ? super Object> localParams = new HashMap<>(params);
         try {
             bundler.validate(localParams);
-            Path result = bundler.execute(localParams, deployParams.outdir);
+            Path result = bundler.execute(localParams,
+                    StandardBundlerParam.OUTPUT_DIR.fetchFrom(params));
             if (result == null) {
                 throw new PackagerException("MSG_BundlerFailed",
                         bundler.getID(), bundler.getName());
@@ -799,27 +833,4 @@ public class Arguments {
         }
         return sb.toString();
     }
-
-    private String getMainClassFromManifest() {
-        if (mainJarPath == null ||
-            input == null ) {
-            return null;
-        }
-
-        JarFile jf;
-        try {
-            Path file = Path.of(input, mainJarPath);
-            if (!Files.exists(file)) {
-                return null;
-            }
-            jf = new JarFile(file.toFile());
-            Manifest m = jf.getManifest();
-            Attributes attrs = (m != null) ? m.getMainAttributes() : null;
-            if (attrs != null) {
-                return attrs.getValue(Attributes.Name.MAIN_CLASS);
-            }
-        } catch (IOException ignore) {}
-        return null;
-    }
-
 }

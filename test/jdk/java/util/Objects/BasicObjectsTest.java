@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2009, 2022, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -23,9 +23,8 @@
 
 /*
  * @test
- * @bug 6797535 6889858 6891113 8013712 8011800 8014365
+ * @bug 6797535 6889858 6891113 8013712 8011800 8014365 8280168
  * @summary Basic tests for methods in java.util.Objects
- * @author  Joseph D. Darcy
  */
 
 import java.util.*;
@@ -40,12 +39,12 @@ public class BasicObjectsTest {
         errors += testHash();
         errors += testToString();
         errors += testToString2();
+        errors += testToIdentityString();
         errors += testCompare();
         errors += testRequireNonNull();
         errors += testIsNull();
         errors += testNonNull();
         errors += testNonNullOf();
-        errors += testNewIdentity();
         if (errors > 0 )
             throw new RuntimeException();
     }
@@ -132,6 +131,37 @@ public class BasicObjectsTest {
         String s = "not the default";
         errors += (s.equals(Objects.toString(null, s)) ) ? 0 : 1;
         errors += (s.equals(Objects.toString(s, "another string")) ) ? 0 : 1;
+        return errors;
+    }
+
+    private static int testToIdentityString() {
+        int errors = 0;
+        // Test null behavior
+        try {
+            Objects.toIdentityString(null);
+            errors++;
+        } catch (NullPointerException npe) {
+            ; // Expected
+        }
+        // Behavior on typical objects
+        Object o = new Object(){};
+        errors += (Objects.toIdentityString(o).equals(o.toString()))? 0 : 1;
+        // Verify object's toString *not* called
+        Object badToString = new Object() {
+                @Override
+                public String toString() {
+                    throw new RuntimeException();
+                }
+            };
+        Objects.toIdentityString(badToString);
+        // Verify object's hashCode *not* called
+        Object badHashCode = new Object() {
+                @Override
+                public int hashCode() {
+                    throw new RuntimeException("0xDEADBEFF");
+                }
+            };
+        Objects.toIdentityString(badHashCode);
         return errors;
     }
 
@@ -274,21 +304,6 @@ public class BasicObjectsTest {
             // expected
             errors += npe.getMessage().equals("supplier") ? 0 : 1;
         }
-        return errors;
-    }
-
-    private static int testNewIdentity() {
-        int errors = 0;
-
-        Object o1 = Objects.newIdentity();
-        Object o2 = Objects.newIdentity();
-
-        if (o1 == null || o2 == null)
-            errors += 1;
-
-        if (o1 == o2)
-            errors += 1;
-
         return errors;
     }
 }

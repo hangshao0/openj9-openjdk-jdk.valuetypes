@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -22,14 +22,19 @@
  */
 package runtime.valhalla.inlinetypes;
 
+import jdk.internal.vm.annotation.ImplicitlyConstructible;
+import jdk.internal.vm.annotation.LooselyConsistentValue;
+import jdk.internal.vm.annotation.NullRestricted;
 import jdk.test.lib.Asserts;
 
 /*
  * @test InlineTypeCreation
  * @summary Inline Type creation test
  * @library /test/lib
- * @compile -XDallowWithFieldOperator -XDallowFlattenabilityModifiers InlineTypeCreation.java Point.java Long8Inline.java Person.java
- * @run main runtime.valhalla.inlinetypes.InlineTypeCreation
+ * @modules java.base/jdk.internal.vm.annotation
+ * @enablePreview
+ * @compile InlineTypeCreation.java Point.java Long8Inline.java Person.java
+ * @run main/othervm runtime.valhalla.inlinetypes.InlineTypeCreation
  */
 public class InlineTypeCreation {
     public static void main(String[] args) {
@@ -42,10 +47,11 @@ public class InlineTypeCreation {
         testLong8();
         testPerson();
         StaticSelf.test();
+        testUnresolvedAndResolvedNew();
     }
 
     void testPoint() {
-        Point p = Point.createPoint(1, 2);
+        Point p = new Point(1, 2);
         Asserts.assertEquals(p.x, 1, "invalid point x value");
         Asserts.assertEquals(p.y, 2, "invalid point y value");
         Point p2 = clonePoint(p);
@@ -59,36 +65,47 @@ public class InlineTypeCreation {
     }
 
     void testLong8() {
-        Long8Inline long8Inline = Long8Inline.create(1, 2, 3, 4, 5, 6, 7, 8);
+        Long8Inline long8Inline = new Long8Inline(1, 2, 3, 4, 5, 6, 7, 8);
         Asserts.assertEquals(long8Inline.getLongField1(), 1L, "Field 1 incorrect");
         Asserts.assertEquals(long8Inline.getLongField8(), 8L, "Field 8 incorrect");
         Long8Inline.check(long8Inline, 1, 2, 3, 4, 5, 6, 7, 8);
     }
 
     void testPerson() {
-        Person person = Person.create(1, "John", "Smith");
+        Person person = new Person(1, "John", "Smith");
         Asserts.assertEquals(person.getId(), 1, "Id field incorrect");
         Asserts.assertEquals(person.getFirstName(), "John", "First name incorrect");
         Asserts.assertEquals(person.getLastName(), "Smith", "Last name incorrect");
     }
 
-    static final primitive class StaticSelf {
+    @ImplicitlyConstructible
+    @LooselyConsistentValue
+    static value class StaticSelf {
 
-        static final StaticSelf.ref DEFAULT = create(0);
-        final int f1;
+        static final StaticSelf DEFAULT = new StaticSelf(0);
+        int f1;
 
-        private StaticSelf() { f1 = 0; }
+        public StaticSelf(int f1) { this.f1 = f1; }
         public String toString() { return "StaticSelf f1=" + f1; }
-
-        static StaticSelf create(int f1) {
-            StaticSelf s = StaticSelf.default;
-            s = __WithField(s.f1, f1);
-            return s;
-        }
 
         public static void test() {
             String s = DEFAULT.toString();
         }
 
     }
+
+    static value class MyPoint {
+         int x,y;
+         MyPoint(int x, int y) {
+             this.x = x;
+             this.y = y;
+         }
+     }
+
+    // Two instantiations of the same class to exercise both the unresolved and resolved paths
+    // in bytecode 'new' implementation
+    void testUnresolvedAndResolvedNew(){
+         MyPoint p1 = new MyPoint(10, 20);
+         MyPoint p2 = new MyPoint(20, 20);
+     }
 }

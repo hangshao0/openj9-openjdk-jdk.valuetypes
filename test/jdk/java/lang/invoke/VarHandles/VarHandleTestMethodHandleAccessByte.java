@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,13 +25,16 @@
 
 /*
  * @test
- * @run testng/othervm -Diters=20000 VarHandleTestMethodHandleAccessByte
+ * @comment Set CompileThresholdScaling to 0.1 so that the warmup loop sets to 2000 iterations
+ *          to hit compilation thresholds
+ * @run testng/othervm -Diters=2000 -XX:CompileThresholdScaling=0.1 VarHandleTestMethodHandleAccessByte
  */
 
 import org.testng.annotations.BeforeClass;
 import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 
+import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.VarHandle;
 import java.util.ArrayList;
@@ -41,8 +44,6 @@ import java.util.List;
 import static org.testng.Assert.*;
 
 public class VarHandleTestMethodHandleAccessByte extends VarHandleBaseTest {
-    static final Class<?> type = byte.class;
-
     static final byte static_final_v = (byte)0x01;
 
     static byte static_v;
@@ -61,26 +62,21 @@ public class VarHandleTestMethodHandleAccessByte extends VarHandleBaseTest {
 
     VarHandle vhArray;
 
-    VarHandle vhValueTypeField;
-
     @BeforeClass
     public void setup() throws Exception {
         vhFinalField = MethodHandles.lookup().findVarHandle(
-                VarHandleTestMethodHandleAccessByte.class, "final_v", type);
+                VarHandleTestMethodHandleAccessByte.class, "final_v", byte.class);
 
         vhField = MethodHandles.lookup().findVarHandle(
-                VarHandleTestMethodHandleAccessByte.class, "v", type);
+                VarHandleTestMethodHandleAccessByte.class, "v", byte.class);
 
         vhStaticFinalField = MethodHandles.lookup().findStaticVarHandle(
-            VarHandleTestMethodHandleAccessByte.class, "static_final_v", type);
+            VarHandleTestMethodHandleAccessByte.class, "static_final_v", byte.class);
 
         vhStaticField = MethodHandles.lookup().findStaticVarHandle(
-            VarHandleTestMethodHandleAccessByte.class, "static_v", type);
+            VarHandleTestMethodHandleAccessByte.class, "static_v", byte.class);
 
         vhArray = MethodHandles.arrayElementVarHandle(byte[].class);
-
-        vhValueTypeField = MethodHandles.lookup().findVarHandle(
-                    Value.class, "byte_v", type);
     }
 
 
@@ -109,11 +105,6 @@ public class VarHandleTestMethodHandleAccessByte extends VarHandleBaseTest {
             cases.add(new MethodHandleAccessTestCase("Array index out of bounds",
                                                      vhArray, f, VarHandleTestMethodHandleAccessByte::testArrayIndexOutOfBounds,
                                                      false));
-        cases.add(new MethodHandleAccessTestCase("Value type field",
-                                                 vhValueTypeField, f, hs -> testValueTypeField(Value.getInstance(), hs)));
-        cases.add(new MethodHandleAccessTestCase("Value type field unsupported",
-                                                 vhValueTypeField, f, hs -> testValueTypeFieldUnsupported(Value.getInstance(), hs),
-                                                 false));
         }
 
         // Work around issue with jtreg summary reporting which truncates
@@ -222,43 +213,79 @@ public class VarHandleTestMethodHandleAccessByte extends VarHandleBaseTest {
         }
 
         {
+            MethodHandle mh = hs.get(TestAccessMode.WEAK_COMPARE_AND_SET_PLAIN);
             boolean success = false;
             for (int c = 0; c < WEAK_ATTEMPTS && !success; c++) {
-                success = (boolean) hs.get(TestAccessMode.WEAK_COMPARE_AND_SET_PLAIN).invokeExact(recv, (byte)0x01, (byte)0x23);
+                success = (boolean) mh.invokeExact(recv, (byte)0x01, (byte)0x23);
+                if (!success) weakDelay();
             }
-            assertEquals(success, true, "weakCompareAndSetPlain byte");
+            assertEquals(success, true, "success weakCompareAndSetPlain byte");
             byte x = (byte) hs.get(TestAccessMode.GET).invokeExact(recv);
-            assertEquals(x, (byte)0x23, "weakCompareAndSetPlain byte value");
+            assertEquals(x, (byte)0x23, "success weakCompareAndSetPlain byte value");
+        }
+
+        {
+            boolean success = (boolean) hs.get(TestAccessMode.WEAK_COMPARE_AND_SET_PLAIN).invokeExact(recv, (byte)0x01, (byte)0x45);
+            assertEquals(success, false, "failing weakCompareAndSetPlain byte");
+            byte x = (byte) hs.get(TestAccessMode.GET).invokeExact(recv);
+            assertEquals(x, (byte)0x23, "failing weakCompareAndSetPlain byte value");
+        }
+
+        {
+            MethodHandle mh = hs.get(TestAccessMode.WEAK_COMPARE_AND_SET_ACQUIRE);
+            boolean success = false;
+            for (int c = 0; c < WEAK_ATTEMPTS && !success; c++) {
+                success = (boolean) mh.invokeExact(recv, (byte)0x23, (byte)0x01);
+                if (!success) weakDelay();
+            }
+            assertEquals(success, true, "success weakCompareAndSetAcquire byte");
+            byte x = (byte) hs.get(TestAccessMode.GET).invokeExact(recv);
+            assertEquals(x, (byte)0x01, "success weakCompareAndSetAcquire byte");
+        }
+
+        {
+            boolean success = (boolean) hs.get(TestAccessMode.WEAK_COMPARE_AND_SET_ACQUIRE).invokeExact(recv, (byte)0x23, (byte)0x45);
+            assertEquals(success, false, "failing weakCompareAndSetAcquire byte");
+            byte x = (byte) hs.get(TestAccessMode.GET).invokeExact(recv);
+            assertEquals(x, (byte)0x01, "failing weakCompareAndSetAcquire byte value");
+        }
+
+        {
+            MethodHandle mh = hs.get(TestAccessMode.WEAK_COMPARE_AND_SET_RELEASE);
+            boolean success = false;
+            for (int c = 0; c < WEAK_ATTEMPTS && !success; c++) {
+                success = (boolean) mh.invokeExact(recv, (byte)0x01, (byte)0x23);
+                if (!success) weakDelay();
+            }
+            assertEquals(success, true, "success weakCompareAndSetRelease byte");
+            byte x = (byte) hs.get(TestAccessMode.GET).invokeExact(recv);
+            assertEquals(x, (byte)0x23, "success weakCompareAndSetRelease byte");
+        }
+
+        {
+            boolean success = (boolean) hs.get(TestAccessMode.WEAK_COMPARE_AND_SET_RELEASE).invokeExact(recv, (byte)0x01, (byte)0x45);
+            assertEquals(success, false, "failing weakCompareAndSetRelease byte");
+            byte x = (byte) hs.get(TestAccessMode.GET).invokeExact(recv);
+            assertEquals(x, (byte)0x23, "failing weakCompareAndSetRelease byte value");
         }
 
         {
             boolean success = false;
+            MethodHandle mh = hs.get(TestAccessMode.WEAK_COMPARE_AND_SET);
             for (int c = 0; c < WEAK_ATTEMPTS && !success; c++) {
-                success = (boolean) hs.get(TestAccessMode.WEAK_COMPARE_AND_SET_ACQUIRE).invokeExact(recv, (byte)0x23, (byte)0x01);
+                success = (boolean) mh.invokeExact(recv, (byte)0x23, (byte)0x01);
+                if (!success) weakDelay();
             }
-            assertEquals(success, true, "weakCompareAndSetAcquire byte");
+            assertEquals(success, true, "success weakCompareAndSet byte");
             byte x = (byte) hs.get(TestAccessMode.GET).invokeExact(recv);
-            assertEquals(x, (byte)0x01, "weakCompareAndSetAcquire byte");
+            assertEquals(x, (byte)0x01, "success weakCompareAndSet byte");
         }
 
         {
-            boolean success = false;
-            for (int c = 0; c < WEAK_ATTEMPTS && !success; c++) {
-                success = (boolean) hs.get(TestAccessMode.WEAK_COMPARE_AND_SET_RELEASE).invokeExact(recv, (byte)0x01, (byte)0x23);
-            }
-            assertEquals(success, true, "weakCompareAndSetRelease byte");
+            boolean success = (boolean) hs.get(TestAccessMode.WEAK_COMPARE_AND_SET).invokeExact(recv, (byte)0x23, (byte)0x45);
+            assertEquals(success, false, "failing weakCompareAndSet byte");
             byte x = (byte) hs.get(TestAccessMode.GET).invokeExact(recv);
-            assertEquals(x, (byte)0x23, "weakCompareAndSetRelease byte");
-        }
-
-        {
-            boolean success = false;
-            for (int c = 0; c < WEAK_ATTEMPTS && !success; c++) {
-                success = (boolean) hs.get(TestAccessMode.WEAK_COMPARE_AND_SET).invokeExact(recv, (byte)0x23, (byte)0x01);
-            }
-            assertEquals(success, true, "weakCompareAndSet byte");
-            byte x = (byte) hs.get(TestAccessMode.GET).invokeExact(recv);
-            assertEquals(x, (byte)0x01, "weakCompareAndSet byte");
+            assertEquals(x, (byte)0x01, "failing weakCompareAndSet byte value");
         }
 
         // Compare set and get
@@ -387,24 +414,6 @@ public class VarHandleTestMethodHandleAccessByte extends VarHandleBaseTest {
 
     }
 
-    static void testValueTypeField(Value recv, Handles hs) throws Throwable {
-        // Plain
-        {
-            byte x = (byte) hs.get(TestAccessMode.GET).invokeExact(recv);
-            assertEquals(x, (byte)0x01, "get byte value");
-        }
-    }
-
-    static void testValueTypeFieldUnsupported(Value recv, Handles hs) throws Throwable {
-        // Plain
-        for (TestAccessMode am : testAccessModesOfType(TestAccessType.SET)) {
-            checkUOE(am, () -> {
-                hs.get(am).invokeExact(recv, (byte)0x01);
-            });
-        }
-
-
-    }
 
     static void testStaticField(Handles hs) throws Throwable {
         // Plain
@@ -496,43 +505,80 @@ public class VarHandleTestMethodHandleAccessByte extends VarHandleBaseTest {
         }
 
         {
+            MethodHandle mh = hs.get(TestAccessMode.WEAK_COMPARE_AND_SET_PLAIN);
             boolean success = false;
             for (int c = 0; c < WEAK_ATTEMPTS && !success; c++) {
-                success = (boolean) hs.get(TestAccessMode.WEAK_COMPARE_AND_SET_PLAIN).invokeExact((byte)0x01, (byte)0x23);
+                success = (boolean) mh.invokeExact((byte)0x01, (byte)0x23);
+                if (!success) weakDelay();
             }
-            assertEquals(success, true, "weakCompareAndSetPlain byte");
+            assertEquals(success, true, "success weakCompareAndSetPlain byte");
             byte x = (byte) hs.get(TestAccessMode.GET).invokeExact();
-            assertEquals(x, (byte)0x23, "weakCompareAndSetPlain byte value");
+            assertEquals(x, (byte)0x23, "success weakCompareAndSetPlain byte value");
         }
 
         {
-            boolean success = false;
-            for (int c = 0; c < WEAK_ATTEMPTS && !success; c++) {
-                success = (boolean) hs.get(TestAccessMode.WEAK_COMPARE_AND_SET_ACQUIRE).invokeExact((byte)0x23, (byte)0x01);
-            }
-            assertEquals(success, true, "weakCompareAndSetAcquire byte");
+            boolean success = (boolean) hs.get(TestAccessMode.WEAK_COMPARE_AND_SET_PLAIN).invokeExact((byte)0x01, (byte)0x45);
+            assertEquals(success, false, "failing weakCompareAndSetPlain byte");
             byte x = (byte) hs.get(TestAccessMode.GET).invokeExact();
-            assertEquals(x, (byte)0x01, "weakCompareAndSetAcquire byte");
+            assertEquals(x, (byte)0x23, "failing weakCompareAndSetPlain byte value");
         }
 
         {
+            MethodHandle mh = hs.get(TestAccessMode.WEAK_COMPARE_AND_SET_ACQUIRE);
             boolean success = false;
             for (int c = 0; c < WEAK_ATTEMPTS && !success; c++) {
-                success = (boolean) hs.get(TestAccessMode.WEAK_COMPARE_AND_SET_RELEASE).invokeExact((byte)0x01, (byte)0x23);
+                success = (boolean) mh.invokeExact((byte)0x23, (byte)0x01);
+                if (!success) weakDelay();
             }
-            assertEquals(success, true, "weakCompareAndSetRelease byte");
+            assertEquals(success, true, "success weakCompareAndSetAcquire byte");
             byte x = (byte) hs.get(TestAccessMode.GET).invokeExact();
-            assertEquals(x, (byte)0x23, "weakCompareAndSetRelease byte");
+            assertEquals(x, (byte)0x01, "success weakCompareAndSetAcquire byte");
         }
 
         {
+            MethodHandle mh = hs.get(TestAccessMode.WEAK_COMPARE_AND_SET_ACQUIRE);
+            boolean success = (boolean) mh.invokeExact((byte)0x23, (byte)0x45);
+            assertEquals(success, false, "failing weakCompareAndSetAcquire byte");
+            byte x = (byte) hs.get(TestAccessMode.GET).invokeExact();
+            assertEquals(x, (byte)0x01, "failing weakCompareAndSetAcquire byte value");
+        }
+
+        {
+            MethodHandle mh = hs.get(TestAccessMode.WEAK_COMPARE_AND_SET_RELEASE);
             boolean success = false;
             for (int c = 0; c < WEAK_ATTEMPTS && !success; c++) {
-                success = (boolean) hs.get(TestAccessMode.WEAK_COMPARE_AND_SET).invokeExact((byte)0x23, (byte)0x01);
+                success = (boolean) mh.invokeExact((byte)0x01, (byte)0x23);
+                if (!success) weakDelay();
             }
-            assertEquals(success, true, "weakCompareAndSet byte");
+            assertEquals(success, true, "success weakCompareAndSetRelease byte");
             byte x = (byte) hs.get(TestAccessMode.GET).invokeExact();
-            assertEquals(x, (byte)0x01, "weakCompareAndSet byte");
+            assertEquals(x, (byte)0x23, "success weakCompareAndSetRelease byte");
+        }
+
+        {
+            boolean success = (boolean) hs.get(TestAccessMode.WEAK_COMPARE_AND_SET_RELEASE).invokeExact((byte)0x01, (byte)0x45);
+            assertEquals(success, false, "failing weakCompareAndSetRelease byte");
+            byte x = (byte) hs.get(TestAccessMode.GET).invokeExact();
+            assertEquals(x, (byte)0x23, "failing weakCompareAndSetRelease byte value");
+        }
+
+        {
+            MethodHandle mh = hs.get(TestAccessMode.WEAK_COMPARE_AND_SET);
+            boolean success = false;
+            for (int c = 0; c < WEAK_ATTEMPTS && !success; c++) {
+                success = (boolean) mh.invokeExact((byte)0x23, (byte)0x01);
+                if (!success) weakDelay();
+            }
+            assertEquals(success, true, "success weakCompareAndSet byte");
+            byte x = (byte) hs.get(TestAccessMode.GET).invokeExact();
+            assertEquals(x, (byte)0x01, "success weakCompareAndSet byte");
+        }
+
+        {
+            boolean success = (boolean) hs.get(TestAccessMode.WEAK_COMPARE_AND_SET).invokeExact((byte)0x23, (byte)0x45);
+            assertEquals(success, false, "failing weakCompareAndSet byte");
+            byte x = (byte) hs.get(TestAccessMode.GET).invokeExact();
+            assertEquals(x, (byte)0x01, "failing weakCompareAndSetRe byte value");
         }
 
         // Compare set and get
@@ -777,43 +823,79 @@ public class VarHandleTestMethodHandleAccessByte extends VarHandleBaseTest {
             }
 
             {
+                MethodHandle mh = hs.get(TestAccessMode.WEAK_COMPARE_AND_SET_PLAIN);
                 boolean success = false;
                 for (int c = 0; c < WEAK_ATTEMPTS && !success; c++) {
-                    success = (boolean) hs.get(TestAccessMode.WEAK_COMPARE_AND_SET_PLAIN).invokeExact(array, i, (byte)0x01, (byte)0x23);
+                    success = (boolean) mh.invokeExact(array, i, (byte)0x01, (byte)0x23);
+                    if (!success) weakDelay();
                 }
-                assertEquals(success, true, "weakCompareAndSetPlain byte");
+                assertEquals(success, true, "success weakCompareAndSetPlain byte");
                 byte x = (byte) hs.get(TestAccessMode.GET).invokeExact(array, i);
-                assertEquals(x, (byte)0x23, "weakCompareAndSetPlain byte value");
+                assertEquals(x, (byte)0x23, "success weakCompareAndSetPlain byte value");
             }
 
             {
-                boolean success = false;
-                for (int c = 0; c < WEAK_ATTEMPTS && !success; c++) {
-                    success = (boolean) hs.get(TestAccessMode.WEAK_COMPARE_AND_SET_ACQUIRE).invokeExact(array, i, (byte)0x23, (byte)0x01);
-                }
-                assertEquals(success, true, "weakCompareAndSetAcquire byte");
+                boolean success = (boolean) hs.get(TestAccessMode.WEAK_COMPARE_AND_SET_PLAIN).invokeExact(array, i, (byte)0x01, (byte)0x45);
+                assertEquals(success, false, "failing weakCompareAndSetPlain byte");
                 byte x = (byte) hs.get(TestAccessMode.GET).invokeExact(array, i);
-                assertEquals(x, (byte)0x01, "weakCompareAndSetAcquire byte");
+                assertEquals(x, (byte)0x23, "failing weakCompareAndSetPlain byte value");
             }
 
             {
+                MethodHandle mh = hs.get(TestAccessMode.WEAK_COMPARE_AND_SET_ACQUIRE);
                 boolean success = false;
                 for (int c = 0; c < WEAK_ATTEMPTS && !success; c++) {
-                    success = (boolean) hs.get(TestAccessMode.WEAK_COMPARE_AND_SET_RELEASE).invokeExact(array, i, (byte)0x01, (byte)0x23);
+                    success = (boolean) mh.invokeExact(array, i, (byte)0x23, (byte)0x01);
+                    if (!success) weakDelay();
                 }
-                assertEquals(success, true, "weakCompareAndSetRelease byte");
+                assertEquals(success, true, "success weakCompareAndSetAcquire byte");
                 byte x = (byte) hs.get(TestAccessMode.GET).invokeExact(array, i);
-                assertEquals(x, (byte)0x23, "weakCompareAndSetRelease byte");
+                assertEquals(x, (byte)0x01, "success weakCompareAndSetAcquire byte");
             }
 
             {
+                boolean success = (boolean) hs.get(TestAccessMode.WEAK_COMPARE_AND_SET_ACQUIRE).invokeExact(array, i, (byte)0x23, (byte)0x45);
+                assertEquals(success, false, "failing weakCompareAndSetAcquire byte");
+                byte x = (byte) hs.get(TestAccessMode.GET).invokeExact(array, i);
+                assertEquals(x, (byte)0x01, "failing weakCompareAndSetAcquire byte value");
+            }
+
+            {
+                MethodHandle mh = hs.get(TestAccessMode.WEAK_COMPARE_AND_SET_RELEASE);
                 boolean success = false;
                 for (int c = 0; c < WEAK_ATTEMPTS && !success; c++) {
-                    success = (boolean) hs.get(TestAccessMode.WEAK_COMPARE_AND_SET).invokeExact(array, i, (byte)0x23, (byte)0x01);
+                    success = (boolean) mh.invokeExact(array, i, (byte)0x01, (byte)0x23);
+                    if (!success) weakDelay();
                 }
-                assertEquals(success, true, "weakCompareAndSet byte");
+                assertEquals(success, true, "success weakCompareAndSetRelease byte");
                 byte x = (byte) hs.get(TestAccessMode.GET).invokeExact(array, i);
-                assertEquals(x, (byte)0x01, "weakCompareAndSet byte");
+                assertEquals(x, (byte)0x23, "success weakCompareAndSetRelease byte");
+            }
+
+            {
+                boolean success = (boolean) hs.get(TestAccessMode.WEAK_COMPARE_AND_SET_ACQUIRE).invokeExact(array, i, (byte)0x01, (byte)0x45);
+                assertEquals(success, false, "failing weakCompareAndSetAcquire byte");
+                byte x = (byte) hs.get(TestAccessMode.GET).invokeExact(array, i);
+                assertEquals(x, (byte)0x23, "failing weakCompareAndSetAcquire byte value");
+            }
+
+            {
+                MethodHandle mh = hs.get(TestAccessMode.WEAK_COMPARE_AND_SET);
+                boolean success = false;
+                for (int c = 0; c < WEAK_ATTEMPTS && !success; c++) {
+                    success = (boolean) mh.invokeExact(array, i, (byte)0x23, (byte)0x01);
+                    if (!success) weakDelay();
+                }
+                assertEquals(success, true, "success weakCompareAndSet byte");
+                byte x = (byte) hs.get(TestAccessMode.GET).invokeExact(array, i);
+                assertEquals(x, (byte)0x01, "success weakCompareAndSet byte");
+            }
+
+            {
+                boolean success = (boolean) hs.get(TestAccessMode.WEAK_COMPARE_AND_SET).invokeExact(array, i, (byte)0x23, (byte)0x45);
+                assertEquals(success, false, "failing weakCompareAndSet byte");
+                byte x = (byte) hs.get(TestAccessMode.GET).invokeExact(array, i);
+                assertEquals(x, (byte)0x01, "failing weakCompareAndSet byte value");
             }
 
             // Compare set and get

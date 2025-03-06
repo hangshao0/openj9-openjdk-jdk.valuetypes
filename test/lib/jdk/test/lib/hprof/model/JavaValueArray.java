@@ -1,12 +1,10 @@
 /*
- * Copyright (c) 1997, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.  Oracle designates this
- * particular file as subject to the "Classpath" exception as provided
- * by Oracle in the LICENSE file that accompanied this code.
+ * published by the Free Software Foundation.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -32,40 +30,18 @@
 
 package jdk.test.lib.hprof.model;
 
-import jdk.test.lib.hprof.parser.ReadBuffer;
 import java.io.IOException;
+import java.nio.ByteOrder;
 import java.util.Objects;
 
 /**
- * An array of values, that is, an array of ints, boolean, floats or the like.
+ * An array of values, that is, an array of ints, boolean, floats, etc.
+ * or flat array of primitive objects.
  *
  * @author      Bill Foote
  */
 public class JavaValueArray extends JavaLazyReadObject
                 /*imports*/ implements ArrayTypeCodes {
-
-    private static String arrayTypeName(byte sig) {
-        switch (sig) {
-            case 'B':
-                return "byte[]";
-            case 'Z':
-                return "boolean[]";
-            case 'C':
-                return "char[]";
-            case 'S':
-                return "short[]";
-            case 'I':
-                return "int[]";
-            case 'F':
-                return "float[]";
-            case 'J':
-                return "long[]";
-            case 'D':
-                return "double[]";
-            default:
-                throw new RuntimeException("invalid array element sig: " + sig);
-        }
-    }
 
     private static int elementSize(byte type) {
         switch (type) {
@@ -102,7 +78,7 @@ public class JavaValueArray extends JavaLazyReadObject
         // length of the array in elements
         long len = buf().getInt(offset);
         // byte length of array
-        return len * elementSize(getElementType());
+        return len * elementSize(getRealElementType());
     }
 
     private long dataStartOffset() {
@@ -174,6 +150,13 @@ public class JavaValueArray extends JavaLazyReadObject
                               }
                               return res;
                 }
+                case 'Q': {
+                    for (int i = 0; i < len; i++) {
+                        res[i] = new InlinedJavaObject(flatArrayElementClass, offset);
+                        offset += flatArrayElementClass.getInlinedInstanceSize();
+                    }
+                    return res;
+                }
                 default: {
                              throw new RuntimeException("unknown primitive type?");
                 }
@@ -183,6 +166,8 @@ public class JavaValueArray extends JavaLazyReadObject
 
     // JavaClass set only after resolve.
     private JavaClass clazz;
+
+    private long objID;
 
     // This field contains elementSignature byte and
     // divider to be used to calculate length. Note that
@@ -199,13 +184,25 @@ public class JavaValueArray extends JavaLazyReadObject
     // Number of bits to shift to get length divider
     private static final int LENGTH_DIVIDER_SHIFT = 8;
 
-    public JavaValueArray(byte elementSignature, long offset) {
+    // Flat array support.
+    private JavaClass flatArrayElementClass;
+
+    public JavaValueArray(long id, byte elementSignature, long offset) {
         super(offset);
+        this.objID = id;
         this.data = (elementSignature & SIGNATURE_MASK);
     }
 
     public JavaClass getClazz() {
         return clazz;
+    }
+
+    public boolean isFlatArray() {
+        return flatArrayElementClass != null;
+    }
+
+    public JavaClass getFlatElementClazz() {
+        return flatArrayElementClass;
     }
 
     public void visitReferencedObjects(JavaHeapObjectVisitor v) {
@@ -216,11 +213,25 @@ public class JavaValueArray extends JavaLazyReadObject
         if (clazz instanceof JavaClass) {
             return;
         }
-        byte elementSig = getElementType();
-        clazz = snapshot.findClass(arrayTypeName(elementSig));
-        if (clazz == null) {
-            clazz = snapshot.getArrayClass("" + ((char) elementSig));
+
+        byte elementType = getElementType();
+        String elementSig = "" + (char)elementType;
+        // Check if this is a flat array of primitive objects.
+        Number elementClassID = snapshot.findFlatArrayElementType(objID);
+        if (elementClassID != null) {
+            // This is flat array.
+            JavaHeapObject elementClazz = snapshot.findThing(getIdValue(elementClassID));
+            if (elementClazz instanceof JavaClass elementJavaClazz) {
+                flatArrayElementClass = elementJavaClazz;
+                // need to resolve the element class
+                flatArrayElementClass.resolve(snapshot);
+                elementSig = "Q" + flatArrayElementClass.getName() + ";";
+            } else {
+                // The class not found.
+                System.out.println("WARNING: flat array element class not found");
+            }
         }
+        clazz = snapshot.getArrayClass(elementSig);
         getClazz().addInstance(this);
         super.resolve(snapshot);
     }
@@ -246,6 +257,9 @@ public class JavaValueArray extends JavaLazyReadObject
             case 'D':
                 divider = 8;
                 break;
+            case 'Q':
+                divider = flatArrayElementClass.getInlinedInstanceSize();
+                break;
             default:
                 throw new RuntimeException("unknown primitive type: " +
                                 elementSignature);
@@ -260,6 +274,10 @@ public class JavaValueArray extends JavaLazyReadObject
     }
 
     public byte getElementType() {
+        return isFlatArray() ? (byte)'Q' : getRealElementType();
+    }
+
+    private byte getRealElementType() {
         return (byte) (data & SIGNATURE_MASK);
     }
 
@@ -282,7 +300,7 @@ public class JavaValueArray extends JavaLazyReadObject
         StringBuilder result;
         JavaThing[] things = getValue();
         byte elementSignature = getElementType();
-        if (elementSignature == 'C')  {
+        if (elementSignature == 'C' && !isFlatArray())  {
             result = new StringBuilder();
             for (int i = 0; i < things.length; i++) {
                 result.append(things[i]);
@@ -349,5 +367,41 @@ public class JavaValueArray extends JavaLazyReadObject
             result.append('}');
         }
         return result.toString();
+    }
+
+    private static final int STRING_HI_BYTE_SHIFT;
+    private static final int STRING_LO_BYTE_SHIFT;
+    static {
+        if (ByteOrder.nativeOrder() == ByteOrder.BIG_ENDIAN) {
+            STRING_HI_BYTE_SHIFT = 8;
+            STRING_LO_BYTE_SHIFT = 0;
+        } else {
+            STRING_HI_BYTE_SHIFT = 0;
+            STRING_LO_BYTE_SHIFT = 8;
+        }
+    }
+
+    // Tries to represent the value as string (used by JavaObject.toString).
+    public String valueAsString(boolean compact) {
+        if (getElementType() == 'B')  {
+            JavaThing[] things = getValue();
+            if (compact) {
+                byte[] bytes = new byte[things.length];
+                for (int i = 0; i < things.length; i++) {
+                    bytes[i] = ((JavaByte)things[i]).value;
+                }
+                return new String(bytes);
+            } else {
+                char[] chars = new char[things.length / 2];
+                for (int i = 0; i < things.length; i += 2) {
+                    int b1 = ((JavaByte)things[i]).value     << STRING_HI_BYTE_SHIFT;
+                    int b2 = ((JavaByte)things[i + 1]).value << STRING_LO_BYTE_SHIFT;
+                    chars[i / 2] = (char)(b1 | b2);
+                }
+                return new String(chars);
+            }
+        }
+        // fallback
+        return valueString();
     }
 }

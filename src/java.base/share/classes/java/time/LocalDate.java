@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2019, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -125,11 +125,18 @@ import java.util.stream.Stream;
  * to be accurate will find the ISO-8601 approach unsuitable.
  * <p>
  * This is a <a href="{@docRoot}/java.base/java/lang/doc-files/ValueBased.html">value-based</a>
- * class; programmers should treat instances that are
- * {@linkplain #equals(Object) equal} as interchangeable and should not
- * use instances for synchronization, or unpredictable behavior may
- * occur. For example, in a future release, synchronization may fail.
- * The {@code equals} method should be used for comparisons.
+ * class; programmers should treat instances that are {@linkplain #equals(Object) equal}
+ * as interchangeable and should not use instances for synchronization, mutexes, or
+ * with {@linkplain java.lang.ref.Reference object references}.
+ *
+ * <div class="preview-block">
+ *      <div class="preview-comment">
+ *          When preview features are enabled, {@code LocalDate} is a {@linkplain Class#isValue value class}.
+ *          Use of value class instances for synchronization, mutexes, or with
+ *          {@linkplain java.lang.ref.Reference object references} result in
+ *          {@link IdentityException}.
+ *      </div>
+ * </div>
  *
  * @implSpec
  * This class is immutable and thread-safe.
@@ -137,6 +144,7 @@ import java.util.stream.Stream;
  * @since 1.8
  */
 @jdk.internal.ValueBased
+@jdk.internal.MigratedValueClass
 public final class LocalDate
         implements Temporal, TemporalAdjuster, ChronoLocalDate, Serializable {
 
@@ -152,6 +160,8 @@ public final class LocalDate
     public static final LocalDate MAX = LocalDate.of(Year.MAX_VALUE, 12, 31);
     /**
      * The epoch year {@code LocalDate}, '1970-01-01'.
+     *
+     * @since 9
      */
     public static final LocalDate EPOCH = LocalDate.of(1970, 1, 1);
 
@@ -172,15 +182,15 @@ public final class LocalDate
     static final long DAYS_0000_TO_1970 = (DAYS_PER_CYCLE * 5L) - (30L * 365L + 7L);
 
     /**
-     * The year.
+     * @serial The year.
      */
     private final int year;
     /**
-     * The month-of-year.
+     * @serial The month-of-year.
      */
     private final short month;
     /**
-     * The day-of-month.
+     * @serial The day-of-month.
      */
     private final short day;
 
@@ -363,13 +373,16 @@ public final class LocalDate
 
         // convert march-based values back to january-based
         int marchMonth0 = (marchDoy0 * 5 + 2) / 153;
-        int month = (marchMonth0 + 2) % 12 + 1;
+        int month = marchMonth0 + 3;
+        if (month > 12) {
+            month -= 12;
+        }
         int dom = marchDoy0 - (marchMonth0 * 306 + 5) / 10 + 1;
-        yearEst += marchMonth0 / 10;
+        if (marchDoy0 >= 306) {
+            yearEst++;
+        }
 
-        // check year now we are certain it is correct
-        int year = YEAR.checkValidIntValue(yearEst);
-        return new LocalDate(year, month, dom);
+        return new LocalDate((int)yearEst, month, dom);
     }
 
     //-----------------------------------------------------------------------
@@ -1983,7 +1996,11 @@ public final class LocalDate
      * chronology is also considered, see {@link java.time.chrono.ChronoLocalDate#compareTo}.
      *
      * @param other  the other date to compare to, not null
-     * @return the comparator value, negative if less, positive if greater
+     * @return the comparator value, that is the comparison of this local date with
+     *          the {@code other} local date and this chronology with the {@code other} chronology,
+     *          in order, returning the first non-zero result, and otherwise returning zero
+     * @see #isBefore
+     * @see #isAfter
      */
     @Override  // override for Javadoc and performance
     public int compareTo(ChronoLocalDate other) {
@@ -2138,28 +2155,36 @@ public final class LocalDate
      */
     @Override
     public String toString() {
+        var buf = new StringBuilder(10);
+        formatTo(buf);
+        return buf.toString();
+    }
+
+    /**
+     * Prints the toString result to the given buf, avoiding extra string allocations.
+     * Requires extra capacity of 10 to avoid StringBuilder reallocation.
+     */
+    void formatTo(StringBuilder buf) {
         int yearValue = year;
         int monthValue = month;
         int dayValue = day;
         int absYear = Math.abs(yearValue);
-        StringBuilder buf = new StringBuilder(10);
         if (absYear < 1000) {
             if (yearValue < 0) {
-                buf.append(yearValue - 10000).deleteCharAt(1);
-            } else {
-                buf.append(yearValue + 10000).deleteCharAt(0);
+                buf.append('-');
             }
+            buf.repeat('0', absYear < 10 ? 3 : absYear < 100 ? 2 : 1);
+            buf.append(absYear);
         } else {
             if (yearValue > 9999) {
                 buf.append('+');
             }
             buf.append(yearValue);
         }
-        return buf.append(monthValue < 10 ? "-0" : "-")
-            .append(monthValue)
-            .append(dayValue < 10 ? "-0" : "-")
-            .append(dayValue)
-            .toString();
+        buf.append(monthValue < 10 ? "-0" : "-")
+           .append(monthValue)
+           .append(dayValue < 10 ? "-0" : "-")
+           .append(dayValue);
     }
 
     //-----------------------------------------------------------------------

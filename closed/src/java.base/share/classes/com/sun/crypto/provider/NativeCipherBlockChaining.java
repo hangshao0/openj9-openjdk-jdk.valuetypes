@@ -24,7 +24,7 @@
  */
 /*
  * ===========================================================================
- * (c) Copyright IBM Corp. 2018, 2020 All Rights Reserved
+ * (c) Copyright IBM Corp. 2018, 2023 All Rights Reserved
  * ===========================================================================
  */
 
@@ -56,6 +56,7 @@ class NativeCipherBlockChaining extends FeedbackCipher  {
 
     private static final NativeCrypto nativeCrypto;
     private static final Cleaner contextCleaner;
+    private int previousKeyLength = -1;
 
     /*
      * Initialize the CBC context.
@@ -182,7 +183,15 @@ class NativeCipherBlockChaining extends FeedbackCipher  {
 
         mode = (decrypting) ? 0 : 1;
 
-        int ret = nativeCrypto.CBCInit(nativeContext, mode, iv, iv.length, key, key.length);
+        int ret;
+        synchronized (this) {
+            if (previousKeyLength == key.length) {
+                ret = nativeCrypto.CBCInit(nativeContext, mode, iv, iv.length, key, key.length, true);
+            } else {
+                ret = nativeCrypto.CBCInit(nativeContext, mode, iv, iv.length, key, key.length, false);
+                previousKeyLength = key.length;
+            }
+        }
         if (ret == -1) {
             throw new ProviderException("Error in Native CipherBlockChaining");
         }
@@ -196,7 +205,10 @@ class NativeCipherBlockChaining extends FeedbackCipher  {
      */
     void reset() {
         System.arraycopy(iv, 0, r, 0, blockSize);
-        int ret = nativeCrypto.CBCInit(nativeContext, mode, iv, iv.length, key, key.length);
+        int ret;
+        synchronized (this) {
+            ret = nativeCrypto.CBCInit(nativeContext, mode, iv, iv.length, key, key.length, true);
+        }
         if (ret == -1) {
             throw new ProviderException("Error in Native CipherBlockChaining");
         }
@@ -217,7 +229,10 @@ class NativeCipherBlockChaining extends FeedbackCipher  {
      */
     void restore() {
         System.arraycopy(rSave, 0, r, 0, blockSize);
-        int ret = nativeCrypto.CBCInit(nativeContext, mode, r, r.length, key, key.length);
+        int ret;
+        synchronized (this) {
+            ret = nativeCrypto.CBCInit(nativeContext, mode, r, r.length, key, key.length, true);
+        }
         if (ret == -1) {
             throw new ProviderException("Error in Native CipherBlockChaining");
         }
@@ -251,8 +266,21 @@ class NativeCipherBlockChaining extends FeedbackCipher  {
             throw new ProviderException("Internal error in input buffering");
         }
 
-        int ret = nativeCrypto.CBCUpdate(nativeContext, plain, plainOffset,
-                                          plainLen, cipher, cipherOffset);
+        /**
+         * OpenSSL doesn't support overlapping buffers, make a copy of plain.
+         */
+        if (plain == cipher) {
+            byte[] copyOfInput = new byte[plainLen];
+            System.arraycopy(plain, plainOffset, copyOfInput, 0, plainLen);
+            plain = copyOfInput;
+            plainOffset = 0;
+        }
+
+        int ret;
+        synchronized (this) {
+            ret = nativeCrypto.CBCUpdate(nativeContext, plain, plainOffset,
+                                            plainLen, cipher, cipherOffset);
+        }
         if (ret == -1) {
             throw new ProviderException("Error in Native CipherBlockChaining");
         }
@@ -309,14 +337,16 @@ class NativeCipherBlockChaining extends FeedbackCipher  {
     int encryptFinal(byte[] plain, int plainOffset, int plainLen,
                      byte[] cipher, int cipherOffset) {
 
-        int ret = -1;
+        int ret;
 
-        if(plain == cipher) {
-            ret = nativeCrypto.CBCFinalEncrypt(nativeContext, plain.clone(),
-                                               plainOffset, plainLen, cipher, cipherOffset);
-        } else {
-            ret = nativeCrypto.CBCFinalEncrypt(nativeContext, plain, plainOffset,
-                                                plainLen, cipher, cipherOffset);
+        synchronized (this) {
+            if (plain == cipher) {
+                ret = nativeCrypto.CBCFinalEncrypt(nativeContext, plain.clone(),
+                                                plainOffset, plainLen, cipher, cipherOffset);
+            } else {
+                ret = nativeCrypto.CBCFinalEncrypt(nativeContext, plain, plainOffset,
+                                                    plainLen, cipher, cipherOffset);
+            }
         }
 
         if (ret == -1) {

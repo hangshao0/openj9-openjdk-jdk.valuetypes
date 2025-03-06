@@ -39,29 +39,29 @@ import java.util.Set;
  */
 public class AccessFlags {
     public static final int ACC_PUBLIC        = 0x0001; // class, inner, field, method
-    public static final int ACC_REF_DEFAULT   = 0x0001; // javac extra
     public static final int ACC_PRIVATE       = 0x0002; //        inner, field, method
     public static final int ACC_PROTECTED     = 0x0004; //        inner, field, method
     public static final int ACC_STATIC        = 0x0008; //        inner, field, method
     public static final int ACC_FINAL         = 0x0010; // class, inner, field, method
-    public static final int ACC_SUPER         = 0x0020; // class
+    public static final int ACC_IDENTITY      = 0x0020; // class, inner
     public static final int ACC_SYNCHRONIZED  = 0x0020; //                      method
+    public static final int ACC_VALUE         = 0x0040; // class, inner,
     public static final int ACC_VOLATILE      = 0x0040; //               field
     public static final int ACC_BRIDGE        = 0x0040; //                      method
     public static final int ACC_TRANSIENT     = 0x0080; //               field
     public static final int ACC_VARARGS       = 0x0080; //                      method
-    public static final int ACC_PRIMITIVE     = 0x0100; // class
     public static final int ACC_NATIVE        = 0x0100; //                      method
     public static final int ACC_INTERFACE     = 0x0200; // class, inner
     public static final int ACC_ABSTRACT      = 0x0400; // class, inner,        method
-    public static final int ACC_STRICT        = 0x0800; //                      method
+    public static final int ACC_PRIMITIVE     = 0x0800; //                      class
+    public static final int ACC_STRICT        = 0x0800; //                      method, field
     public static final int ACC_SYNTHETIC     = 0x1000; // class, inner, field, method
     public static final int ACC_ANNOTATION    = 0x2000; // class, inner
     public static final int ACC_ENUM          = 0x4000; // class, inner, field
     public static final int ACC_MANDATED      = 0x8000; //                          method parameter
     public static final int ACC_MODULE        = 0x8000; // class
 
-    public static enum Kind { Class, InnerClass, Field, Method, JavacExtra}
+    public static enum Kind { Class, InnerClass, Field, Method}
 
     AccessFlags(ClassReader cr) throws IOException {
         this(cr.readUnsignedShort());
@@ -84,12 +84,12 @@ public class AccessFlags {
     }
 
     private static final int[] classModifiers = {
-        ACC_PUBLIC, ACC_FINAL, ACC_ABSTRACT, ACC_PRIMITIVE
+        ACC_PUBLIC, ACC_FINAL, ACC_IDENTITY, ACC_ABSTRACT, ACC_PRIMITIVE, ACC_VALUE
     };
 
     private static final int[] classFlags = {
-        ACC_PUBLIC, ACC_FINAL, ACC_SUPER, ACC_INTERFACE, ACC_ABSTRACT,
-        ACC_SYNTHETIC, ACC_ANNOTATION, ACC_ENUM, ACC_MODULE, ACC_PRIMITIVE
+        ACC_PUBLIC, ACC_FINAL, ACC_IDENTITY, ACC_INTERFACE, ACC_ABSTRACT,
+        ACC_SYNTHETIC, ACC_ANNOTATION, ACC_ENUM, ACC_MODULE, ACC_PRIMITIVE, ACC_VALUE
     };
 
     public Set<String> getClassModifiers() {
@@ -102,13 +102,13 @@ public class AccessFlags {
     }
 
     private static final int[] innerClassModifiers = {
-        ACC_PUBLIC, ACC_PRIVATE, ACC_PROTECTED, ACC_STATIC, ACC_FINAL,
-        ACC_ABSTRACT, ACC_PRIMITIVE
+        ACC_PUBLIC, ACC_PRIVATE, ACC_PROTECTED, ACC_STATIC, ACC_FINAL, ACC_IDENTITY,
+        ACC_ABSTRACT, ACC_PRIMITIVE, ACC_VALUE
     };
 
     private static final int[] innerClassFlags = {
-        ACC_PUBLIC, ACC_PRIVATE, ACC_PROTECTED, ACC_STATIC, ACC_FINAL, ACC_SUPER,
-        ACC_INTERFACE, ACC_ABSTRACT, ACC_SYNTHETIC, ACC_ANNOTATION, ACC_ENUM, ACC_PRIMITIVE
+        ACC_PUBLIC, ACC_PRIVATE, ACC_PROTECTED, ACC_STATIC, ACC_FINAL, ACC_IDENTITY,
+        ACC_INTERFACE, ACC_ABSTRACT, ACC_SYNTHETIC, ACC_ANNOTATION, ACC_ENUM, ACC_PRIMITIVE, ACC_VALUE
     };
 
     public Set<String> getInnerClassModifiers() {
@@ -127,7 +127,7 @@ public class AccessFlags {
 
     private static final int[] fieldFlags = {
         ACC_PUBLIC, ACC_PRIVATE, ACC_PROTECTED, ACC_STATIC, ACC_FINAL,
-        ACC_VOLATILE, ACC_TRANSIENT, ACC_SYNTHETIC, ACC_ENUM
+        ACC_VOLATILE, ACC_TRANSIENT, ACC_SYNTHETIC, ACC_ENUM, ACC_STRICT
     };
 
     public Set<String> getFieldModifiers() {
@@ -199,19 +199,18 @@ public class AccessFlags {
                 return "static";
             case ACC_FINAL:
                 return "final";
-            case ACC_SYNCHRONIZED:
-                return "synchronized";
+            case 0x20:
+                return (t == Kind.Class || t == Kind.InnerClass) ? "identity" : "synchronized";
             case 0x80:
                 return (t == Kind.Field ? "transient" : null);
             case ACC_VOLATILE:
                 return "volatile";
-            case 0x100:
-                // ACC_NATIVE or ACC_PRIMITIVE
-                return (t == Kind.Class || t == Kind.InnerClass) ? "primitive" : "native";
+            case ACC_NATIVE:
+                return "native";
             case ACC_ABSTRACT:
                 return "abstract";
-            case ACC_STRICT:
-                return "strictfp";
+            case 0x800:
+                return (t == Kind.Field) ? "strict" : "strictfp";
             case ACC_MANDATED:
                 return "mandated";
             default:
@@ -232,13 +231,13 @@ public class AccessFlags {
         case ACC_FINAL:
             return "ACC_FINAL";
         case 0x20:
-            return (t == Kind.Class ? "ACC_SUPER" : "ACC_SYNCHRONIZED");
+            return ((t == Kind.Class || t == Kind.InnerClass) ? "ACC_IDENTITY" : "ACC_SYNCHRONIZED");
         case 0x40:
-            return (t == Kind.Field ? "ACC_VOLATILE" : "ACC_BRIDGE");
+            return (t == Kind.Field ? "ACC_VOLATILE" : t == Kind.Method ? "ACC_BRIDGE" : "ACC_VALUE");
         case 0x80:
             return (t == Kind.Field ? "ACC_TRANSIENT" : "ACC_VARARGS");
-        case 0x100:
-            return (t == Kind.Class || t == Kind.InnerClass) ? "ACC_PRIMITIVE" : "ACC_NATIVE";
+        case ACC_NATIVE:
+            return "ACC_NATIVE";
         case ACC_INTERFACE:
             return "ACC_INTERFACE";
         case ACC_ABSTRACT:

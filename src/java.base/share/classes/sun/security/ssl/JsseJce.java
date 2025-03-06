@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2001, 2019, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2001, 2022, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -21,6 +21,12 @@
  * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
  * or visit www.oracle.com if you need additional information or have any
  * questions.
+ */
+
+/*
+ * ===========================================================================
+ * (c) Copyright IBM Corp. 2023, 2023 All Rights Reserved
+ * ===========================================================================
  */
 
 package sun.security.ssl;
@@ -91,6 +97,26 @@ final class JsseJce {
     static final String SIGNATURE_ECDSA = "SHA1withECDSA";
 
     /**
+     * JCA identifier string for ECDSA, i.e. a ECDSA with SHA224.
+     */
+    static final String SIGNATURE_ECDSA_224 = "SHA224withECDSA";
+
+    /**
+     * JCA identifier string for ECDSA, i.e. a ECDSA with SHA256.
+     */
+    static final String SIGNATURE_ECDSA_256 = "SHA256withECDSA";
+
+    /**
+     * JCA identifier string for ECDSA, i.e. a ECDSA with SHA384.
+     */
+    static final String SIGNATURE_ECDSA_384 = "SHA384withECDSA";
+
+    /**
+     * JCA identifier string for ECDSA, i.e. a ECDSA with SHA512.
+     */
+    static final String SIGNATURE_ECDSA_512 = "SHA512withECDSA";
+
+    /**
      * JCA identifier for EdDSA signatures.
      */
     static final String SIGNATURE_EDDSA = "EdDSA";
@@ -110,7 +136,7 @@ final class JsseJce {
     static final String SIGNATURE_RAWECDSA = "NONEwithECDSA";
 
     /**
-     * JCA identifier string for Raw RSA, i.e. a RSA PKCS#1 v1.5 signature
+     * JCA identifier string for Raw RSA, i.e. an RSA PKCS#1 v1.5 signature
      * without hashing where the application provides the hash of the data.
      * Used for RSA client authentication with a 36 byte hash.
      */
@@ -118,7 +144,7 @@ final class JsseJce {
 
     /**
      * JCA identifier string for the SSL/TLS style RSA Signature. I.e.
-     * an signature using RSA with PKCS#1 v1.5 padding signing a
+     * a signature using RSA with PKCS#1 v1.5 padding signing a
      * concatenation of an MD5 and SHA-1 digest.
      */
     static final String SIGNATURE_SSLRSA = "MD5andSHA1withRSA";
@@ -143,8 +169,7 @@ final class JsseJce {
     }
 
     static RSAPublicKeySpec getRSAPublicKeySpec(PublicKey key) {
-        if (key instanceof RSAPublicKey) {
-            RSAPublicKey rsaKey = (RSAPublicKey)key;
+        if (key instanceof RSAPublicKey rsaKey) {
             return new RSAPublicKeySpec(rsaKey.getModulus(),
                                         rsaKey.getPublicExponent());
         }
@@ -163,10 +188,38 @@ final class JsseJce {
         // Is EC crypto available?
         private static final boolean isAvailable;
 
+        /**
+         * Checks if a particular signature algorithm is available.
+         *
+         * @param algorithm the algorithm we will attempt to instantiate to check if it is available
+         * @return true if the signature algorithm is found, false otherwise
+         */
+        private static boolean isSignatureAlgorithmAvailable(String algorithm) {
+            try {
+                // Attempt to create a Cipher instance with the specified algorithm.
+                Signature.getInstance(algorithm);
+                return true;
+            } catch (NoSuchAlgorithmException e) {
+                return false;
+            }
+        }
+
         static {
             boolean mediator = true;
             try {
-                Signature.getInstance(SIGNATURE_ECDSA);
+                // When running in FIPS mode, the signature "SHA1withECDSA" is not
+                // available by default. In this scenario we should still set EC
+                // availability to true since other algorithms in the ECDSA signature
+                // family are available for use in various ECDSA TLS ciphers. All
+                // FIPS solutions are expected to have an algorithm such as
+                // "SHA512withECDSA", "SHA384withECDSA", "SHA256withECDSA", or
+                // "SHA224withECDSA" available so we will also check for these algorithms.
+                mediator = isSignatureAlgorithmAvailable(SIGNATURE_ECDSA)
+                    || isSignatureAlgorithmAvailable(SIGNATURE_ECDSA_224)
+                    || isSignatureAlgorithmAvailable(SIGNATURE_ECDSA_256)
+                    || isSignatureAlgorithmAvailable(SIGNATURE_ECDSA_384)
+                    || isSignatureAlgorithmAvailable(SIGNATURE_ECDSA_512);
+
                 Signature.getInstance(SIGNATURE_RAWECDSA);
                 KeyAgreement.getInstance("ECDH");
                 KeyFactory.getInstance("EC");

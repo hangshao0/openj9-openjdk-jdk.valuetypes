@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2019, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -32,25 +32,18 @@ import com.sun.tools.javac.util.*;
 import com.sun.tools.javac.util.JCDiagnostic.DiagnosticPosition;
 
 import java.util.function.ToIntBiFunction;
-import java.util.function.ToIntFunction;
 
 import static com.sun.tools.javac.code.TypeTag.BOT;
+import static com.sun.tools.javac.code.TypeTag.DOUBLE;
 import static com.sun.tools.javac.code.TypeTag.INT;
+import static com.sun.tools.javac.code.TypeTag.LONG;
 import static com.sun.tools.javac.jvm.ByteCodes.*;
-import static com.sun.tools.javac.jvm.ClassFile.CONSTANT_Class;
-import static com.sun.tools.javac.jvm.ClassFile.CONSTANT_Double;
-import static com.sun.tools.javac.jvm.ClassFile.CONSTANT_Fieldref;
-import static com.sun.tools.javac.jvm.ClassFile.CONSTANT_Float;
-import static com.sun.tools.javac.jvm.ClassFile.CONSTANT_Integer;
-import static com.sun.tools.javac.jvm.ClassFile.CONSTANT_InterfaceMethodref;
-import static com.sun.tools.javac.jvm.ClassFile.CONSTANT_Long;
-import static com.sun.tools.javac.jvm.ClassFile.CONSTANT_MethodHandle;
-import static com.sun.tools.javac.jvm.ClassFile.CONSTANT_MethodType;
-import static com.sun.tools.javac.jvm.ClassFile.CONSTANT_Methodref;
-import static com.sun.tools.javac.jvm.ClassFile.CONSTANT_String;
 import static com.sun.tools.javac.jvm.UninitializedType.*;
-import static com.sun.tools.javac.jvm.ClassWriter.StackMapTableFrame;
+import static com.sun.tools.javac.jvm.ClassWriter.StackMapTableEntry;
 import java.util.Arrays;
+import java.util.Map;
+import java.util.HashMap;
+import java.util.Set;
 
 /** An internal structure that corresponds to the code attribute of
  *  methods in a classfile. The class also provides some utility operations to
@@ -195,6 +188,12 @@ public class Code {
 
     private int letExprStackPos = 0;
 
+    private Map<Integer, Set<VarSymbol>> cpToUnsetFieldsMap = new HashMap<>();
+
+    public Set<VarSymbol> currentUnsetFields;
+
+    boolean generateAssertUnsetFieldsFrame;
+
     /** Construct a code object, given the settings of the fatcode,
      *  debugging info switches and the CharacterRangeTable.
      */
@@ -207,7 +206,8 @@ public class Code {
                 CRTable crt,
                 Symtab syms,
                 Types types,
-                PoolWriter poolWriter) {
+                PoolWriter poolWriter,
+                boolean generateAssertUnsetFieldsFrame) {
         this.meth = meth;
         this.fatcode = fatcode;
         this.lineMap = lineMap;
@@ -229,6 +229,7 @@ public class Code {
         }
         state = new State();
         lvar = new LocalVar[20];
+        this.generateAssertUnsetFieldsFrame = generateAssertUnsetFieldsFrame;
     }
 
 
@@ -399,23 +400,14 @@ public class Code {
 
     /** Emit a ldc (or ldc_w) instruction, taking into account operand size
     */
-    public void emitLdc(LoadableConstant constant, int od) {
-        if (od <= 255) {
-            emitop1(ldc1, od, constant);
-        }
-        else {
-            emitop2(ldc2, od, constant);
-        }
-    }
-
-    /** Emit a ldc (or ldc_w) instruction, taking into account operand size
-     */
     public void emitLdc(LoadableConstant constant) {
         int od = poolWriter.putConstant(constant);
-        if (od <= 255) {
+        Type constantType = types.constantType(constant);
+        if (constantType.hasTag(LONG) || constantType.hasTag(DOUBLE)) {
+            emitop2(ldc2w, od, constant);
+        } else if (od <= 255) {
             emitop1(ldc1, od, constant);
-        }
-        else {
+        } else {
             emitop2(ldc2, od, constant);
         }
     }
@@ -632,7 +624,7 @@ public class Code {
             markDead();
             break;
         case athrow:
-            state.pop(1);
+            state.pop(state.stacksize);
             markDead();
             break;
         case lstore_0:
@@ -1031,12 +1023,7 @@ public class Code {
             break;
         case new_: {
             Type t = (Type)data;
-            state.push(uninitializedObject(t.tsym.erasure(types), cp - 3));
-            break;
-        }
-        case defaultvalue: {
-            Type t = (Type)data;
-            state.push(t.tsym.erasure(types));
+            state.push(uninitializedObject(t.tsym.erasure(types), cp-3));
             break;
         }
         case sipush:
@@ -1065,9 +1052,6 @@ public class Code {
         case goto_:
             markDead();
             break;
-        case withfield:
-            state.pop(((Symbol)data).erasure(types));
-            break;
         case putfield:
             state.pop(((Symbol)data).erasure(types));
             state.pop(1); // object ref
@@ -1078,18 +1062,16 @@ public class Code {
             break;
         case checkcast: {
             state.pop(1); // object ref
-            Type t = types.erasure(data instanceof  ConstantPoolQType ? ((ConstantPoolQType)data).type: (Type)data);
+            Type t = types.erasure((Type)data);
             state.push(t);
             break; }
+        case ldc2:
         case ldc2w:
             state.push(types.constantType((LoadableConstant)data));
             break;
         case instanceof_:
             state.pop(1);
             state.push(syms.intType);
-            break;
-        case ldc2:
-            state.push(types.constantType((LoadableConstant)data));
             break;
         case jsr:
             break;
@@ -1098,7 +1080,6 @@ public class Code {
         }
         // postop();
     }
-
     /** Emit an opcode with a four-byte operand field.
      */
     public void emitop4(int op, int od) {
@@ -1236,7 +1217,7 @@ public class Code {
         return !alive || state.stacksize == letExprStackPos;
     }
 
-/**************************************************************************
+/* ************************************************************************
  * Stack map generation
  *************************************************************************/
 
@@ -1245,13 +1226,14 @@ public class Code {
         int pc;
         Type[] locals;
         Type[] stack;
+        Set<VarSymbol> unsetFields;
     }
 
     /** A buffer of cldc stack map entries. */
     StackMapFrame[] stackMapBuffer = null;
 
     /** A buffer of compressed StackMapTable entries. */
-    StackMapTableFrame[] stackMapTableBuffer = null;
+    StackMapTableEntry[] stackMapTableBuffer = null;
     int stackMapBufferSize = 0;
 
     /** The last PC at which we generated a stack map. */
@@ -1372,18 +1354,32 @@ public class Code {
             }
         }
 
+        Set<VarSymbol> unsetFieldsAtPC = cpToUnsetFieldsMap.get(pc);
+        boolean generateAssertUnsetFieldsEntry = unsetFieldsAtPC != null && generateAssertUnsetFieldsFrame;
+
         if (stackMapTableBuffer == null) {
-            stackMapTableBuffer = new StackMapTableFrame[20];
+            stackMapTableBuffer = new StackMapTableEntry[20];
         } else {
             stackMapTableBuffer = ArrayUtils.ensureCapacity(
                                     stackMapTableBuffer,
-                                    stackMapBufferSize);
+                                    stackMapBufferSize + (generateAssertUnsetFieldsEntry ? 1 : 0));
+        }
+
+        if (generateAssertUnsetFieldsEntry) {
+            if (lastFrame.unsetFields == null || !lastFrame.unsetFields.equals(unsetFieldsAtPC)) {
+                stackMapTableBuffer[stackMapBufferSize++] = new StackMapTableEntry.AssertUnsetFields(pc, unsetFieldsAtPC);
+                frame.unsetFields = unsetFieldsAtPC;
+            }
         }
         stackMapTableBuffer[stackMapBufferSize++] =
-                StackMapTableFrame.getInstance(frame, lastFrame.pc, lastFrame.locals, types);
+                StackMapTableEntry.getInstance(frame, lastFrame, types, pc);
 
         frameBeforeLast = lastFrame;
         lastFrame = frame;
+    }
+
+    public void addUnsetFieldsAtPC(int pc, Set<VarSymbol> unsetFields) {
+        cpToUnsetFieldsMap.put(pc, unsetFields);
     }
 
     StackMapFrame getInitialFrame() {
@@ -1411,7 +1407,7 @@ public class Code {
     }
 
 
-/**************************************************************************
+/* ************************************************************************
  * Operations having to do with jumps
  *************************************************************************/
 
@@ -1485,6 +1481,9 @@ public class Code {
             result = new Chain(emitJump(opcode),
                                result,
                                state.dup());
+            if (currentUnsetFields != null) {
+                addUnsetFieldsAtPC(result.pc, currentUnsetFields);
+            }
             fixedPc = fatcode;
             if (opcode == goto_) alive = false;
         }
@@ -1496,6 +1495,7 @@ public class Code {
     public void resolve(Chain chain, int target) {
         boolean changed = false;
         State newState = state;
+        int originalTarget = target;
         for (; chain != null; chain = chain.next) {
             Assert.check(state != chain.state
                     && (target > chain.pc || isStatementStart()));
@@ -1522,13 +1522,21 @@ public class Code {
                     break;
                 }
             } else {
-                if (fatcode)
+                if (fatcode) {
                     put4(chain.pc + 1, target - chain.pc);
+                    if (cpToUnsetFieldsMap.get(chain.pc) != null) {
+                        addUnsetFieldsAtPC(originalTarget, cpToUnsetFieldsMap.get(chain.pc));
+                    }
+                }
                 else if (target - chain.pc < Short.MIN_VALUE ||
                          target - chain.pc > Short.MAX_VALUE)
                     fatcode = true;
-                else
+                else {
                     put2(chain.pc + 1, target - chain.pc);
+                    if (cpToUnsetFieldsMap.get(chain.pc) != null) {
+                        addUnsetFieldsAtPC(originalTarget, cpToUnsetFieldsMap.get(chain.pc));
+                    }
+                }
                 Assert.check(!alive ||
                     chain.state.stacksize == newState.stacksize &&
                     chain.state.nlocks == newState.nlocks);
@@ -1792,8 +1800,8 @@ public class Code {
             case ARRAY:
                 int width = width(t);
                 Type old = stack[stacksize-width];
-                Assert.check(types.isSubtype(types.erasure(old), types.erasure(t)) ||
-                        (old.isPrimitiveClass() != t.isPrimitiveClass() && types.isConvertible(types.erasure(old), types.erasure(t))));
+                Assert.check(types.isSubtype(types.erasure(old),
+                                       types.erasure(t)));
                 stack[stacksize-width] = t;
                 break;
             default:
@@ -2034,7 +2042,7 @@ public class Code {
             if (localVar != null) {
                 for (LocalVar.Range range: localVar.aliveRanges) {
                     if (range.closed() && range.start_pc + range.length >= oldCP) {
-                        range.length += delta;
+                        range.length += (char)delta;
                     }
                 }
             }
@@ -2208,6 +2216,8 @@ public class Code {
                 ((var.sym.owner.flags() & Flags.LAMBDA_METHOD) == 0 ||
                  (var.sym.flags() & Flags.PARAMETER) == 0);
         if (ignoredSyntheticVar) return;
+        //don't include unnamed variables:
+        if (var.sym.name == var.sym.name.table.names.empty) return ;
         if (varBuffer == null)
             varBuffer = new LocalVar[20];
         else
@@ -2253,7 +2263,7 @@ public class Code {
         for (int i = nextreg; i < prevNextReg; i++) endScope(i);
     }
 
-/**************************************************************************
+/* ************************************************************************
  * static tables
  *************************************************************************/
 
@@ -2467,8 +2477,6 @@ public class Code {
             mnem[goto_w] = "goto_w";
             mnem[jsr_w] = "jsr_w";
             mnem[breakpoint] = "breakpoint";
-            mnem[defaultvalue] = "defaultvalue";
-            mnem[withfield] = "withfield";
         }
     }
 }

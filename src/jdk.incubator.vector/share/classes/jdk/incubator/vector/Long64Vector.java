@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,7 +24,7 @@
  */
 package jdk.incubator.vector;
 
-import java.nio.ByteBuffer;
+import java.lang.foreign.MemorySegment;
 import java.util.Arrays;
 import java.util.Objects;
 import java.util.function.IntUnaryOperator;
@@ -136,24 +136,15 @@ final class Long64Vector extends LongVector {
     @ForceInline
     Long64Shuffle iotaShuffle() { return Long64Shuffle.IOTA; }
 
+    @Override
     @ForceInline
     Long64Shuffle iotaShuffle(int start, int step, boolean wrap) {
-      if (wrap) {
-        return (Long64Shuffle)VectorSupport.shuffleIota(ETYPE, Long64Shuffle.class, VSPECIES, VLENGTH, start, step, 1,
-                (l, lstart, lstep, s) -> s.shuffleFromOp(i -> (VectorIntrinsics.wrapToRange(i*lstep + lstart, l))));
-      } else {
-        return (Long64Shuffle)VectorSupport.shuffleIota(ETYPE, Long64Shuffle.class, VSPECIES, VLENGTH, start, step, 0,
-                (l, lstart, lstep, s) -> s.shuffleFromOp(i -> (i*lstep + lstart)));
-      }
+        return (Long64Shuffle) iotaShuffleTemplate(start, step, wrap);
     }
 
     @Override
     @ForceInline
-    Long64Shuffle shuffleFromBytes(byte[] reorder) { return new Long64Shuffle(reorder); }
-
-    @Override
-    @ForceInline
-    Long64Shuffle shuffleFromArray(int[] indexes, int i) { return new Long64Shuffle(indexes, i); }
+    Long64Shuffle shuffleFromArray(int[] indices, int i) { return new Long64Shuffle(indices, i); }
 
     @Override
     @ForceInline
@@ -231,8 +222,8 @@ final class Long64Vector extends LongVector {
 
     @ForceInline
     final @Override
-    long rOp(long v, FBinOp f) {
-        return super.rOpTemplate(v, f);  // specialize
+    long rOp(long v, VectorMask<Long> m, FBinOp f) {
+        return super.rOpTemplate(v, m, f);  // specialize
     }
 
     @Override
@@ -270,8 +261,20 @@ final class Long64Vector extends LongVector {
 
     @Override
     @ForceInline
+    public Long64Vector lanewise(Unary op, VectorMask<Long> m) {
+        return (Long64Vector) super.lanewiseTemplate(op, Long64Mask.class, (Long64Mask) m);  // specialize
+    }
+
+    @Override
+    @ForceInline
     public Long64Vector lanewise(Binary op, Vector<Long> v) {
         return (Long64Vector) super.lanewiseTemplate(op, v);  // specialize
+    }
+
+    @Override
+    @ForceInline
+    public Long64Vector lanewise(Binary op, Vector<Long> v, VectorMask<Long> m) {
+        return (Long64Vector) super.lanewiseTemplate(op, Long64Mask.class, v, (Long64Mask) m);  // specialize
     }
 
     /*package-private*/
@@ -283,11 +286,26 @@ final class Long64Vector extends LongVector {
 
     /*package-private*/
     @Override
+    @ForceInline Long64Vector
+    lanewiseShift(VectorOperators.Binary op, int e, VectorMask<Long> m) {
+        return (Long64Vector) super.lanewiseShiftTemplate(op, Long64Mask.class, e, (Long64Mask) m);  // specialize
+    }
+
+    /*package-private*/
+    @Override
     @ForceInline
     public final
     Long64Vector
-    lanewise(VectorOperators.Ternary op, Vector<Long> v1, Vector<Long> v2) {
+    lanewise(Ternary op, Vector<Long> v1, Vector<Long> v2) {
         return (Long64Vector) super.lanewiseTemplate(op, v1, v2);  // specialize
+    }
+
+    @Override
+    @ForceInline
+    public final
+    Long64Vector
+    lanewise(Ternary op, Vector<Long> v1, Vector<Long> v2, VectorMask<Long> m) {
+        return (Long64Vector) super.lanewiseTemplate(op, Long64Mask.class, v1, v2, (Long64Mask) m);  // specialize
     }
 
     @Override
@@ -309,7 +327,7 @@ final class Long64Vector extends LongVector {
     @ForceInline
     public final long reduceLanes(VectorOperators.Associative op,
                                     VectorMask<Long> m) {
-        return super.reduceLanesTemplate(op, m);  // specialized
+        return super.reduceLanesTemplate(op, Long64Mask.class, (Long64Mask) m);  // specialized
     }
 
     @Override
@@ -322,12 +340,19 @@ final class Long64Vector extends LongVector {
     @ForceInline
     public final long reduceLanesToLong(VectorOperators.Associative op,
                                         VectorMask<Long> m) {
-        return (long) super.reduceLanesTemplate(op, m);  // specialized
+        return (long) super.reduceLanesTemplate(op, Long64Mask.class, (Long64Mask) m);  // specialized
     }
 
+    @Override
     @ForceInline
-    public VectorShuffle<Long> toShuffle() {
-        return super.toShuffleTemplate(Long64Shuffle.class); // specialize
+    final <F> VectorShuffle<F> bitsToShuffle(AbstractSpecies<F> dsp) {
+        return bitsToShuffleTemplate(dsp);
+    }
+
+    @Override
+    @ForceInline
+    public final Long64Shuffle toShuffle() {
+        return (Long64Shuffle) toShuffle(vspecies(), false);
     }
 
     // Specialized unary testing
@@ -336,6 +361,12 @@ final class Long64Vector extends LongVector {
     @ForceInline
     public final Long64Mask test(Test op) {
         return super.testTemplate(Long64Mask.class, op);  // specialize
+    }
+
+    @Override
+    @ForceInline
+    public final Long64Mask test(Test op, VectorMask<Long> m) {
+        return super.testTemplate(Long64Mask.class, op, (Long64Mask) m);  // specialize
     }
 
     // Specialized comparisons
@@ -350,6 +381,13 @@ final class Long64Vector extends LongVector {
     @ForceInline
     public final Long64Mask compare(Comparison op, long s) {
         return super.compareTemplate(Long64Mask.class, op, s);  // specialize
+    }
+
+
+    @Override
+    @ForceInline
+    public final Long64Mask compare(Comparison op, Vector<Long> v, VectorMask<Long> m) {
+        return super.compareTemplate(Long64Mask.class, op, v, (Long64Mask) m);
     }
 
 
@@ -409,6 +447,7 @@ final class Long64Vector extends LongVector {
                                   VectorMask<Long> m) {
         return (Long64Vector)
             super.rearrangeTemplate(Long64Shuffle.class,
+                                    Long64Mask.class,
                                     (Long64Shuffle) shuffle,
                                     (Long64Mask) m);  // specialize
     }
@@ -425,6 +464,22 @@ final class Long64Vector extends LongVector {
 
     @Override
     @ForceInline
+    public Long64Vector compress(VectorMask<Long> m) {
+        return (Long64Vector)
+            super.compressTemplate(Long64Mask.class,
+                                   (Long64Mask) m);  // specialize
+    }
+
+    @Override
+    @ForceInline
+    public Long64Vector expand(VectorMask<Long> m) {
+        return (Long64Vector)
+            super.expandTemplate(Long64Mask.class,
+                                   (Long64Mask) m);  // specialize
+    }
+
+    @Override
+    @ForceInline
     public Long64Vector selectFrom(Vector<Long> v) {
         return (Long64Vector)
             super.selectFromTemplate((Long64Vector) v);  // specialize
@@ -436,9 +491,16 @@ final class Long64Vector extends LongVector {
                                    VectorMask<Long> m) {
         return (Long64Vector)
             super.selectFromTemplate((Long64Vector) v,
-                                     (Long64Mask) m);  // specialize
+                                     Long64Mask.class, (Long64Mask) m);  // specialize
     }
 
+    @Override
+    @ForceInline
+    public Long64Vector selectFrom(Vector<Long> v1,
+                                   Vector<Long> v2) {
+        return (Long64Vector)
+            super.selectFromTemplate((Long64Vector) v1, (Long64Vector) v2);  // specialize
+    }
 
     @ForceInline
     @Override
@@ -572,24 +634,21 @@ final class Long64Vector extends LongVector {
             AbstractSpecies<E> species = (AbstractSpecies<E>) dsp;
             if (length() != species.laneCount())
                 throw new IllegalArgumentException("VectorMask length and species length differ");
-            if (VSIZE == species.vectorBitSize()) {
-                Class<?> dtype = species.elementType();
-                Class<?> dmtype = species.maskType();
-                return VectorSupport.convert(VectorSupport.VECTOR_OP_REINTERPRET,
-                    this.getClass(), ETYPE, VLENGTH,
-                    dmtype, dtype, VLENGTH,
-                    this, species,
-                    Long64Mask::defaultMaskCast);
-            }
-            return this.defaultMaskCast(species);
+
+            return VectorSupport.convert(VectorSupport.VECTOR_OP_CAST,
+                this.getClass(), ETYPE, VLENGTH,
+                species.maskType(), species.elementType(), VLENGTH,
+                this, species,
+                (m, s) -> s.maskFactory(m.toArray()).check(s));
         }
 
         @Override
         @ForceInline
-        public Long64Mask eq(VectorMask<Long> mask) {
-            Objects.requireNonNull(mask);
-            Long64Mask m = (Long64Mask)mask;
-            return xor(m.not());
+        /*package-private*/
+        Long64Mask indexPartiallyInUpperRange(long offset, long limit) {
+            return (Long64Mask) VectorSupport.indexPartiallyInUpperRange(
+                Long64Mask.class, long.class, VLENGTH, offset, limit,
+                (o, l) -> (Long64Mask) TRUE_MASK.indexPartiallyInRange(o, l));
         }
 
         // Unary operations
@@ -600,6 +659,15 @@ final class Long64Vector extends LongVector {
             return xor(maskAll(true));
         }
 
+        @Override
+        @ForceInline
+        public Long64Mask compress() {
+            return (Long64Mask)VectorSupport.compressExpandOp(VectorSupport.VECTOR_OP_MASK_COMPRESS,
+                Long64Vector.class, Long64Mask.class, ETYPE, VLENGTH, null, this,
+                (v1, m1) -> VSPECIES.iota().compare(VectorOperators.LT, m1.trueCount()));
+        }
+
+
         // Binary operations
 
         @Override
@@ -607,9 +675,9 @@ final class Long64Vector extends LongVector {
         public Long64Mask and(VectorMask<Long> mask) {
             Objects.requireNonNull(mask);
             Long64Mask m = (Long64Mask)mask;
-            return VectorSupport.binaryOp(VECTOR_OP_AND, Long64Mask.class, long.class, VLENGTH,
-                                             this, m,
-                                             (m1, m2) -> m1.bOp(m2, (i, a, b) -> a & b));
+            return VectorSupport.binaryOp(VECTOR_OP_AND, Long64Mask.class, null, long.class, VLENGTH,
+                                          this, m, null,
+                                          (m1, m2, vm) -> m1.bOp(m2, (i, a, b) -> a & b));
         }
 
         @Override
@@ -617,19 +685,19 @@ final class Long64Vector extends LongVector {
         public Long64Mask or(VectorMask<Long> mask) {
             Objects.requireNonNull(mask);
             Long64Mask m = (Long64Mask)mask;
-            return VectorSupport.binaryOp(VECTOR_OP_OR, Long64Mask.class, long.class, VLENGTH,
-                                             this, m,
-                                             (m1, m2) -> m1.bOp(m2, (i, a, b) -> a | b));
+            return VectorSupport.binaryOp(VECTOR_OP_OR, Long64Mask.class, null, long.class, VLENGTH,
+                                          this, m, null,
+                                          (m1, m2, vm) -> m1.bOp(m2, (i, a, b) -> a | b));
         }
 
+        @Override
         @ForceInline
-        /* package-private */
-        Long64Mask xor(VectorMask<Long> mask) {
+        public Long64Mask xor(VectorMask<Long> mask) {
             Objects.requireNonNull(mask);
             Long64Mask m = (Long64Mask)mask;
-            return VectorSupport.binaryOp(VECTOR_OP_XOR, Long64Mask.class, long.class, VLENGTH,
-                                          this, m,
-                                          (m1, m2) -> m1.bOp(m2, (i, a, b) -> a ^ b));
+            return VectorSupport.binaryOp(VECTOR_OP_XOR, Long64Mask.class, null, long.class, VLENGTH,
+                                          this, m, null,
+                                          (m1, m2, vm) -> m1.bOp(m2, (i, a, b) -> a ^ b));
         }
 
         // Mask Query operations
@@ -637,22 +705,42 @@ final class Long64Vector extends LongVector {
         @Override
         @ForceInline
         public int trueCount() {
-            return VectorSupport.maskReductionCoerced(VECTOR_OP_MASK_TRUECOUNT, Long64Mask.class, long.class, VLENGTH, this,
-                                                      (m) -> trueCountHelper(((Long64Mask)m).getBits()));
+            return (int) VectorSupport.maskReductionCoerced(VECTOR_OP_MASK_TRUECOUNT, Long64Mask.class, long.class, VLENGTH, this,
+                                                      (m) -> trueCountHelper(m.getBits()));
         }
 
         @Override
         @ForceInline
         public int firstTrue() {
-            return VectorSupport.maskReductionCoerced(VECTOR_OP_MASK_FIRSTTRUE, Long64Mask.class, long.class, VLENGTH, this,
-                                                      (m) -> firstTrueHelper(((Long64Mask)m).getBits()));
+            return (int) VectorSupport.maskReductionCoerced(VECTOR_OP_MASK_FIRSTTRUE, Long64Mask.class, long.class, VLENGTH, this,
+                                                      (m) -> firstTrueHelper(m.getBits()));
         }
 
         @Override
         @ForceInline
         public int lastTrue() {
-            return VectorSupport.maskReductionCoerced(VECTOR_OP_MASK_LASTTRUE, Long64Mask.class, long.class, VLENGTH, this,
-                                                      (m) -> lastTrueHelper(((Long64Mask)m).getBits()));
+            return (int) VectorSupport.maskReductionCoerced(VECTOR_OP_MASK_LASTTRUE, Long64Mask.class, long.class, VLENGTH, this,
+                                                      (m) -> lastTrueHelper(m.getBits()));
+        }
+
+        @Override
+        @ForceInline
+        public long toLong() {
+            if (length() > Long.SIZE) {
+                throw new UnsupportedOperationException("too many lanes for one long");
+            }
+            return VectorSupport.maskReductionCoerced(VECTOR_OP_MASK_TOLONG, Long64Mask.class, long.class, VLENGTH, this,
+                                                      (m) -> toLongHelper(m.getBits()));
+        }
+
+        // laneIsSet
+
+        @Override
+        @ForceInline
+        public boolean laneIsSet(int i) {
+            Objects.checkIndex(i, length());
+            return VectorSupport.extract(Long64Mask.class, long.class, VLENGTH,
+                                         this, i, (m, idx) -> (m.getBits()[idx] ? 1L : 0L)) == 1L;
         }
 
         // Reductions
@@ -676,9 +764,9 @@ final class Long64Vector extends LongVector {
         @ForceInline
         /*package-private*/
         static Long64Mask maskAll(boolean bit) {
-            return VectorSupport.broadcastCoerced(Long64Mask.class, long.class, VLENGTH,
-                                                  (bit ? -1 : 0), null,
-                                                  (v, __) -> (v != 0 ? TRUE_MASK : FALSE_MASK));
+            return VectorSupport.fromBitsCoerced(Long64Mask.class, long.class, VLENGTH,
+                                                 (bit ? -1 : 0), MODE_BROADCAST, null,
+                                                 (v, __) -> (v != 0 ? TRUE_MASK : FALSE_MASK));
         }
         private static final Long64Mask  TRUE_MASK = new Long64Mask(true);
         private static final Long64Mask FALSE_MASK = new Long64Mask(false);
@@ -691,23 +779,26 @@ final class Long64Vector extends LongVector {
         static final int VLENGTH = VSPECIES.laneCount();    // used by the JVM
         static final Class<Long> ETYPE = long.class; // used by the JVM
 
-        Long64Shuffle(byte[] reorder) {
-            super(VLENGTH, reorder);
+        Long64Shuffle(long[] indices) {
+            super(indices);
+            assert(VLENGTH == indices.length);
+            assert(indicesInRange(indices));
         }
 
-        public Long64Shuffle(int[] reorder) {
-            super(VLENGTH, reorder);
+        Long64Shuffle(int[] indices, int i) {
+            this(prepare(indices, i));
         }
 
-        public Long64Shuffle(int[] reorder, int i) {
-            super(VLENGTH, reorder, i);
+        Long64Shuffle(IntUnaryOperator fn) {
+            this(prepare(fn));
         }
 
-        public Long64Shuffle(IntUnaryOperator fn) {
-            super(VLENGTH, fn);
+        long[] indices() {
+            return (long[])getPayload();
         }
 
         @Override
+        @ForceInline
         public LongSpecies vspecies() {
             return VSPECIES;
         }
@@ -715,40 +806,122 @@ final class Long64Vector extends LongVector {
         static {
             // There must be enough bits in the shuffle lanes to encode
             // VLENGTH valid indexes and VLENGTH exceptional ones.
-            assert(VLENGTH < Byte.MAX_VALUE);
-            assert(Byte.MIN_VALUE <= -VLENGTH);
+            assert(VLENGTH < Long.MAX_VALUE);
+            assert(Long.MIN_VALUE <= -VLENGTH);
         }
         static final Long64Shuffle IOTA = new Long64Shuffle(IDENTITY);
 
         @Override
         @ForceInline
         public Long64Vector toVector() {
-            return VectorSupport.shuffleToVector(VCLASS, ETYPE, Long64Shuffle.class, this, VLENGTH,
-                                                    (s) -> ((Long64Vector)(((AbstractShuffle<Long>)(s)).toVectorTemplate())));
+            return toBitsVector();
         }
 
         @Override
         @ForceInline
-        public <F> VectorShuffle<F> cast(VectorSpecies<F> s) {
-            AbstractSpecies<F> species = (AbstractSpecies<F>) s;
-            if (length() != species.laneCount())
-                throw new IllegalArgumentException("VectorShuffle length and species length differ");
-            int[] shuffleArray = toArray();
-            return s.shuffleFromArray(shuffleArray, 0).check(s);
+        Long64Vector toBitsVector() {
+            return (Long64Vector) super.toBitsVectorTemplate();
         }
 
-        @ForceInline
         @Override
-        public Long64Shuffle rearrange(VectorShuffle<Long> shuffle) {
-            Long64Shuffle s = (Long64Shuffle) shuffle;
-            byte[] reorder1 = reorder();
-            byte[] reorder2 = s.reorder();
-            byte[] r = new byte[reorder1.length];
-            for (int i = 0; i < reorder1.length; i++) {
-                int ssi = reorder2[i];
-                r[i] = reorder1[ssi];  // throws on exceptional index
+        Long64Vector toBitsVector0() {
+            return ((Long64Vector) vspecies().asIntegral().dummyVector()).vectorFactory(indices());
+        }
+
+        @Override
+        @ForceInline
+        public int laneSource(int i) {
+            return (int)toBitsVector().lane(i);
+        }
+
+        @Override
+        @ForceInline
+        public void intoArray(int[] a, int offset) {
+            switch (length()) {
+                case 1 -> a[offset] = laneSource(0);
+                case 2 -> toBitsVector()
+                        .convertShape(VectorOperators.L2I, IntVector.SPECIES_64, 0)
+                        .reinterpretAsInts()
+                        .intoArray(a, offset);
+                case 4 -> toBitsVector()
+                        .convertShape(VectorOperators.L2I, IntVector.SPECIES_128, 0)
+                        .reinterpretAsInts()
+                        .intoArray(a, offset);
+                case 8 -> toBitsVector()
+                        .convertShape(VectorOperators.L2I, IntVector.SPECIES_256, 0)
+                        .reinterpretAsInts()
+                        .intoArray(a, offset);
+                case 16 -> toBitsVector()
+                        .convertShape(VectorOperators.L2I, IntVector.SPECIES_512, 0)
+                        .reinterpretAsInts()
+                        .intoArray(a, offset);
+                default -> {
+                    VectorIntrinsics.checkFromIndexSize(offset, length(), a.length);
+                    for (int i = 0; i < length(); i++) {
+                        a[offset + i] = laneSource(i);
+                    }
+                }
             }
-            return new Long64Shuffle(r);
+        }
+
+        @Override
+        @ForceInline
+        public final Long64Mask laneIsValid() {
+            return (Long64Mask) toBitsVector().compare(VectorOperators.GE, 0)
+                    .cast(vspecies());
+        }
+
+        @ForceInline
+        @Override
+        public final Long64Shuffle rearrange(VectorShuffle<Long> shuffle) {
+            Long64Shuffle concreteShuffle = (Long64Shuffle) shuffle;
+            return (Long64Shuffle) toBitsVector().rearrange(concreteShuffle)
+                    .toShuffle(vspecies(), false);
+        }
+
+        @ForceInline
+        @Override
+        public final Long64Shuffle wrapIndexes() {
+            Long64Vector v = toBitsVector();
+            if ((length() & (length() - 1)) == 0) {
+                v = (Long64Vector) v.lanewise(VectorOperators.AND, length() - 1);
+            } else {
+                v = (Long64Vector) v.blend(v.lanewise(VectorOperators.ADD, length()),
+                            v.compare(VectorOperators.LT, 0));
+            }
+            return (Long64Shuffle) v.toShuffle(vspecies(), false);
+        }
+
+        private static long[] prepare(int[] indices, int offset) {
+            long[] a = new long[VLENGTH];
+            for (int i = 0; i < VLENGTH; i++) {
+                int si = indices[offset + i];
+                si = partiallyWrapIndex(si, VLENGTH);
+                a[i] = (long)si;
+            }
+            return a;
+        }
+
+        private static long[] prepare(IntUnaryOperator f) {
+            long[] a = new long[VLENGTH];
+            for (int i = 0; i < VLENGTH; i++) {
+                int si = f.applyAsInt(i);
+                si = partiallyWrapIndex(si, VLENGTH);
+                a[i] = (long)si;
+            }
+            return a;
+        }
+
+        private static boolean indicesInRange(long[] indices) {
+            int length = indices.length;
+            for (long si : indices) {
+                if (si >= (long)length || si < (long)(-length)) {
+                    String msg = ("index "+si+"out of range ["+length+"] in "+
+                                  java.util.Arrays.toString(indices));
+                    throw new AssertionError(msg);
+                }
+            }
+            return true;
         }
     }
 
@@ -763,20 +936,34 @@ final class Long64Vector extends LongVector {
         return super.fromArray0Template(a, offset);  // specialize
     }
 
-
-
     @ForceInline
     @Override
     final
-    LongVector fromByteArray0(byte[] a, int offset) {
-        return super.fromByteArray0Template(a, offset);  // specialize
+    LongVector fromArray0(long[] a, int offset, VectorMask<Long> m, int offsetInRange) {
+        return super.fromArray0Template(Long64Mask.class, a, offset, (Long64Mask) m, offsetInRange);  // specialize
     }
 
     @ForceInline
     @Override
     final
-    LongVector fromByteBuffer0(ByteBuffer bb, int offset) {
-        return super.fromByteBuffer0Template(bb, offset);  // specialize
+    LongVector fromArray0(long[] a, int offset, int[] indexMap, int mapOffset, VectorMask<Long> m) {
+        return super.fromArray0Template(Long64Mask.class, a, offset, indexMap, mapOffset, (Long64Mask) m);
+    }
+
+
+
+    @ForceInline
+    @Override
+    final
+    LongVector fromMemorySegment0(MemorySegment ms, long offset) {
+        return super.fromMemorySegment0Template(ms, offset);  // specialize
+    }
+
+    @ForceInline
+    @Override
+    final
+    LongVector fromMemorySegment0(MemorySegment ms, long offset, VectorMask<Long> m, int offsetInRange) {
+        return super.fromMemorySegment0Template(Long64Mask.class, ms, offset, (Long64Mask) m, offsetInRange);  // specialize
     }
 
     @ForceInline
@@ -789,12 +976,29 @@ final class Long64Vector extends LongVector {
     @ForceInline
     @Override
     final
-    void intoByteArray0(byte[] a, int offset) {
-        super.intoByteArray0Template(a, offset);  // specialize
+    void intoArray0(long[] a, int offset, VectorMask<Long> m) {
+        super.intoArray0Template(Long64Mask.class, a, offset, (Long64Mask) m);
     }
+
+    @ForceInline
+    @Override
+    final
+    void intoArray0(long[] a, int offset, int[] indexMap, int mapOffset, VectorMask<Long> m) {
+        super.intoArray0Template(Long64Mask.class, a, offset, indexMap, mapOffset, (Long64Mask) m);
+    }
+
+
+    @ForceInline
+    @Override
+    final
+    void intoMemorySegment0(MemorySegment ms, long offset, VectorMask<Long> m) {
+        super.intoMemorySegment0Template(Long64Mask.class, ms, offset, (Long64Mask) m);
+    }
+
 
     // End of specialized low-level memory operations.
 
     // ================================================
 
 }
+

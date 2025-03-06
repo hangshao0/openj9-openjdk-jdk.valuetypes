@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -28,10 +28,10 @@ import test.java.lang.invoke.lib.InstructionHelper;
 
 /*
  * @test ObjectMethods
- * @summary Check object method implemented by the VM behave with inline types
- * @library /test/lib /test/jdk/lib/testlibrary/bytecode /test/jdk/java/lang/invoke/common
- * @build jdk.experimental.bytecode.BasicClassBuilder test.java.lang.invoke.lib.InstructionHelper
- * @compile -XDallowWithFieldOperator ObjectMethods.java
+ * @summary Check object methods implemented by the VM behave with value types
+ * @library /test/lib /test/jdk/java/lang/invoke/common
+ * @enablePreview
+ * @compile ObjectMethods.java
  * @run main/othervm -XX:+UseCompressedClassPointers runtime.valhalla.inlinetypes.ObjectMethods
  * @run main/othervm -XX:-UseCompressedClassPointers runtime.valhalla.inlinetypes.ObjectMethods
  * @run main/othervm -noverify runtime.valhalla.inlinetypes.ObjectMethods noverify
@@ -44,8 +44,8 @@ public class ObjectMethods {
     }
 
     public static void testObjectMethods(boolean verifierDisabled) {
-        MyInt val = MyInt.create(7);
-        MyInt sameVal = MyInt.create(7);
+        MyInt val = new MyInt(7);
+        MyInt sameVal = new MyInt(7);
 
         // Exercise all the Object native/VM methods...
 
@@ -55,13 +55,14 @@ public class ObjectMethods {
         }
 
         // getClass()
-        checkGetClass(val, MyInt.ref.class);
+        checkGetClass(val, MyInt.class);
 
         //hashCode()/identityHashCode()
         checkHashCodes(val, sameVal.hashCode());
 
-        // clone()
+        // clone() - test the default implementation from j.l.Object
         checkNotCloneable(val);
+        checkCloneable(new MyCloneableInt(78));
 
         // synchronized
         checkSynchronized(val);
@@ -107,19 +108,34 @@ public class ObjectMethods {
         if (!sawCnse) {
             throw new RuntimeException("clone() did not fail");
         }
-        // Cloneable inline type checked by "BadInlineTypes" CFP tests
+    }
+
+    static void checkCloneable(MyCloneableInt val) {
+        boolean sawCnse = false;
+        MyCloneableInt val2 = null;
+        try {
+            val2 = (MyCloneableInt)val.attemptClone();
+        } catch (CloneNotSupportedException cnse) {
+            sawCnse = true;
+        }
+        if (sawCnse) {
+            throw new RuntimeException("clone() did fail");
+        }
+        if (val != val2) {
+            throw new RuntimeException("Cloned value is not identical to the original");
+        }
     }
 
     static void checkSynchronized(Object val) {
-        boolean sawImse = false;
+        boolean sawIe = false;
         try {
             synchronized (val) {
-                throw new IllegalStateException("Unreachable code, reached");
+                throw new IdentityException("Unreachable code, reached");
             }
-        } catch (IllegalMonitorStateException imse) {
-            sawImse = true;
+        } catch (IdentityException ie) {
+            sawIe = true;
         }
-        if (!sawImse) {
+        if (!sawIe) {
             throw new RuntimeException("monitorenter did not fail");
         }
         // synchronized method modifiers tested by "BadInlineTypes" CFP tests
@@ -128,26 +144,26 @@ public class ObjectMethods {
 
     // Check we haven't broken the mismatched monitor block check...
     static void checkMonitorExit(Object val) {
-        boolean sawImse = false;
+        boolean sawIe = false;
         try {
-            InstructionHelper.loadCode(MethodHandles.lookup(),
-                                        "mismatchedMonitorExit",
-                                        MethodType.methodType(Void.TYPE, Object.class),
-                                        CODE->{
-                                            CODE
-                                                .aload(0)
-                                                .monitorexit()
-                                                .return_();
-                                        }).invokeExact(val);
+            InstructionHelper.buildMethodHandle(MethodHandles.lookup(),
+                                                "mismatchedMonitorExit",
+                                                MethodType.methodType(Void.TYPE, Object.class),
+                                                CODE-> {
+                                                    CODE
+                                                    .aload(0)
+                                                    .monitorexit();
+                                                    CODE.return_();
+                                                }).invokeExact(val);
             throw new IllegalStateException("Unreachable code, reached");
         } catch (Throwable t) {
             if (t instanceof IllegalMonitorStateException) {
-                sawImse = true;
+                sawIe = true;
             } else {
                 throw new RuntimeException(t);
             }
         }
-        if (!sawImse) {
+        if (!sawIe) {
             throw new RuntimeException("monitorexit did not fail");
         }
     }
@@ -212,14 +228,28 @@ public class ObjectMethods {
         }
     }
 
-    static final primitive class MyInt {
-        final int value;
-        private MyInt() { value = 0; }
-        public static MyInt create(int v) {
-            MyInt mi = MyInt.default;
-            mi = __WithField(mi.value, v);
-            return mi;
+    static value class MyInt {
+        int value;
+        public MyInt(int v) { value = v; }
+        public Object attemptClone() throws CloneNotSupportedException {
+            try { // Check it is not possible to clone...
+                MethodHandles.Lookup lookup = MethodHandles.lookup();
+                MethodHandle mh = lookup.findVirtual(getClass(),
+                                                     "clone",
+                                                     MethodType.methodType(Object.class));
+                return mh.invokeExact(this);
+            } catch (Throwable t) {
+                if (t instanceof CloneNotSupportedException) {
+                    throw (CloneNotSupportedException) t;
+                }
+                throw new RuntimeException(t);
+            }
         }
+    }
+
+    static value class MyCloneableInt implements Cloneable {
+        int value;
+        public MyCloneableInt(int v) { value = v; }
         public Object attemptClone() throws CloneNotSupportedException {
             try { // Check it is not possible to clone...
                 MethodHandles.Lookup lookup = MethodHandles.lookup();

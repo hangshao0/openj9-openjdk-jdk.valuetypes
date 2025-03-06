@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1996, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1996, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -23,6 +23,12 @@
  * questions.
  */
 
+ /*
+ * ===========================================================================
+ * (c) Copyright IBM Corp. 2023, 2023 All Rights Reserved
+ * ===========================================================================
+ */
+
 package java.lang.reflect;
 
 import jdk.internal.access.SharedSecrets;
@@ -37,6 +43,7 @@ import sun.reflect.generics.factory.GenericsFactory;
 import sun.reflect.generics.scope.ClassScope;
 import java.lang.annotation.Annotation;
 import java.util.Map;
+import java.util.Set;
 import java.util.Objects;
 import sun.reflect.annotation.AnnotationParser;
 import sun.reflect.annotation.AnnotationSupport;
@@ -65,36 +72,28 @@ import sun.reflect.annotation.TypeAnnotationParser;
  */
 public final
 class Field extends AccessibleObject implements Member {
-
-    @Stable
-    private Class<?>            clazz;
-    private int                 slot;
+    private final Class<?>            clazz;
+    private final int                 slot;
     // This is guaranteed to be interned by the VM in the 1.4
     // reflection implementation
-    private String              name;
-    @Stable
-    private Class<?>            type;
-    @Stable
-    private int                 modifiers;
-    private boolean             trustedFinal;
+    private final String              name;
+    private final Class<?>            type;
+    private final int                 modifiers;
+    private final int                 flags;
     // Generics and annotations support
-    private transient String    signature;
-    // generic info repository; lazily initialized
-    private transient FieldRepository genericInfo;
-    private byte[]              annotations;
-    // Cached field accessor created without override
-    @Stable
-    private FieldAccessor fieldAccessor;
-    // Cached field accessor created with override
-    @Stable
-    private FieldAccessor overrideFieldAccessor;
-    // For sharing of FieldAccessors. This branching structure is
-    // currently only two levels deep (i.e., one root Field and
-    // potentially many Field objects pointing to it.)
-    //
-    // If this branching structure would ever contain cycles, deadlocks can
-    // occur in annotation code.
-    private Field               root;
+    private final transient String    signature;
+    private final byte[]              annotations;
+
+    /**
+     * Fields are mutable due to {@link AccessibleObject#setAccessible(boolean)}.
+     * Thus, we return a new copy of a root each time a field is returned.
+     * Some lazily initialized immutable states can be stored on root and shared to the copies.
+     */
+    private Field root;
+    private transient volatile FieldRepository genericInfo;
+    private @Stable FieldAccessor fieldAccessor; // access control enabled
+    private @Stable FieldAccessor overrideFieldAccessor; // access control suppressed
+    // End shared states
 
     // Generics infrastructure
 
@@ -109,15 +108,18 @@ class Field extends AccessibleObject implements Member {
 
     // Accessor for generic info repository
     private FieldRepository getGenericInfo() {
-        // lazily initialize repository if necessary
+        var genericInfo = this.genericInfo;
         if (genericInfo == null) {
-            // create and cache generic info repository
-            genericInfo = FieldRepository.make(getGenericSignature(),
-                                               getFactory());
+            var root = this.root;
+            if (root != null) {
+                genericInfo = root.getGenericInfo();
+            } else {
+                genericInfo = FieldRepository.make(getGenericSignature(), getFactory());
+            }
+            this.genericInfo = genericInfo;
         }
-        return genericInfo; //return cached repository
+        return genericInfo;
     }
-
 
     /**
      * Package-private constructor
@@ -127,17 +129,16 @@ class Field extends AccessibleObject implements Member {
           String name,
           Class<?> type,
           int modifiers,
-          boolean trustedFinal,
+          int flags,
           int slot,
           String signature,
           byte[] annotations)
     {
-        assert declaringClass.isPrimaryType();
         this.clazz = declaringClass;
         this.name = name;
         this.type = type;
         this.modifiers = modifiers;
-        this.trustedFinal = trustedFinal;
+        this.flags = flags;
         this.slot = slot;
         this.signature = signature;
         this.annotations = annotations;
@@ -159,23 +160,22 @@ class Field extends AccessibleObject implements Member {
         if (this.root != null)
             throw new IllegalArgumentException("Can not copy a non-root Field");
 
-        Field res = new Field(clazz, name, type, modifiers, trustedFinal, slot, signature, annotations);
+        Field res = new Field(clazz, name, type, modifiers, flags, slot, signature, annotations);
         res.root = this;
         // Might as well eagerly propagate this if already present
         res.fieldAccessor = fieldAccessor;
         res.overrideFieldAccessor = overrideFieldAccessor;
+        res.genericInfo = genericInfo;
 
         return res;
     }
 
     /**
      * @throws InaccessibleObjectException {@inheritDoc}
-     * @throws SecurityException {@inheritDoc}
      */
     @Override
     @CallerSensitive
     public void setAccessible(boolean flag) {
-        AccessibleObject.checkPermission();
         if (flag) checkCanSetAccessible(Reflection.getCallerClass());
         setAccessible0(flag);
     }
@@ -207,11 +207,28 @@ class Field extends AccessibleObject implements Member {
      * be used to decode the modifiers.
      *
      * @see Modifier
+     * @see #accessFlags()
      * @jls 8.3 Field Declarations
      * @jls 9.3 Field (Constant) Declarations
      */
     public int getModifiers() {
         return modifiers;
+    }
+
+    /**
+     * {@return an unmodifiable set of the {@linkplain AccessFlag
+     * access flags} for this field, possibly empty}
+     * The {@code AccessFlags} may depend on the class file format version of the class.
+     *
+     * @see #getModifiers()
+     * @jvms 4.5 Fields
+     * @since 20
+     */
+    @Override
+    public Set<AccessFlag> accessFlags() {
+        int major = SharedSecrets.getJavaLangAccess().classFileFormatVersion(getDeclaringClass()) & 0xffff;
+        var cffv = ClassFileFormatVersion.fromMajor(major);
+        return AccessFlag.maskToAccessFlags(getModifiers(), AccessFlag.Location.FIELD, cffv);
     }
 
     /**
@@ -335,21 +352,13 @@ class Field extends AccessibleObject implements Member {
         int mod = getModifiers();
         return (((mod == 0) ? "" : (Modifier.toString(mod) + " "))
             + getType().getTypeName() + " "
-            + getDeclaringClassTypeName() + "."
+            + getDeclaringClass().getTypeName() + "."
             + getName());
     }
 
     @Override
     String toShortString() {
-        return "field " + getDeclaringClassTypeName() + "." + getName();
-    }
-
-    String getDeclaringClassTypeName() {
-        Class<?> c = getDeclaringClass();
-        if (c.isPrimitiveClass()) {
-            c = c.asValueType();
-        }
-        return c.getTypeName();
+        return "field " + getDeclaringClass().getTypeName() + "." + getName();
     }
 
     /**
@@ -377,7 +386,7 @@ class Field extends AccessibleObject implements Member {
         Type fieldType = getGenericType();
         return (((mod == 0) ? "" : (Modifier.toString(mod) + " "))
             + fieldType.getTypeName() + " "
-            + getDeclaringClassTypeName() + "."
+            + getDeclaringClass().getTypeName() + "."
             + getName());
     }
 
@@ -771,8 +780,8 @@ class Field extends AccessibleObject implements Member {
      * <li>the field is non-static; and</li>
      * <li>the field's declaring class is not a {@linkplain Class#isHidden()
      *     hidden class};</li>
-     * <li>the field's declaring class is not a {@linkplain Class#isPrimitiveClass()
-     *     primitive class}; and</li>
+     * <li>the field's declaring class is not a {@linkplain Class#isValue()
+     *     value class}; and</li>
      * <li>the field's declaring class is not a {@linkplain Class#isRecord()
      *     record class}.</li>
      * </ul>
@@ -1157,7 +1166,6 @@ class Field extends AccessibleObject implements Member {
                     modifiers);
     }
 
-    // security check is done before calling this method
     private FieldAccessor getFieldAccessor() {
         FieldAccessor a = fieldAccessor;
         return (a != null) ? a : acquireFieldAccessor();
@@ -1229,8 +1237,15 @@ class Field extends AccessibleObject implements Member {
         return root;
     }
 
+    private static final int TRUST_FINAL     = 0x0010;
+    private static final int NULL_RESTRICTED = 0x0020;
+
     /* package-private */ boolean isTrustedFinal() {
-        return trustedFinal;
+        return (flags & TRUST_FINAL) == TRUST_FINAL;
+    }
+
+    /* package-private */ boolean isNullRestricted() {
+        return (flags & NULL_RESTRICTED) == NULL_RESTRICTED;
     }
 
     /**
@@ -1279,8 +1294,7 @@ class Field extends AccessibleObject implements Member {
                     } else {
                         declAnnos = AnnotationParser.parseAnnotations(
                                 annotations,
-                                SharedSecrets.getJavaLangAccess()
-                                        .getConstantPool(getDeclaringClass()),
+                                com.ibm.oti.vm.VM.getConstantPoolFromAnnotationBytes(getDeclaringClass(), annotations),
                                 getDeclaringClass());
                     }
                     declaredAnnotations = declAnnos;

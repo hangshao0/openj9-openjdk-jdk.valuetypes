@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,7 +24,7 @@
  */
 package jdk.incubator.vector;
 
-import java.nio.ByteBuffer;
+import java.lang.foreign.MemorySegment;
 import java.util.Arrays;
 import java.util.Objects;
 import java.util.function.IntUnaryOperator;
@@ -141,24 +141,15 @@ final class IntMaxVector extends IntVector {
     @ForceInline
     IntMaxShuffle iotaShuffle() { return IntMaxShuffle.IOTA; }
 
+    @Override
     @ForceInline
     IntMaxShuffle iotaShuffle(int start, int step, boolean wrap) {
-      if (wrap) {
-        return (IntMaxShuffle)VectorSupport.shuffleIota(ETYPE, IntMaxShuffle.class, VSPECIES, VLENGTH, start, step, 1,
-                (l, lstart, lstep, s) -> s.shuffleFromOp(i -> (VectorIntrinsics.wrapToRange(i*lstep + lstart, l))));
-      } else {
-        return (IntMaxShuffle)VectorSupport.shuffleIota(ETYPE, IntMaxShuffle.class, VSPECIES, VLENGTH, start, step, 0,
-                (l, lstart, lstep, s) -> s.shuffleFromOp(i -> (i*lstep + lstart)));
-      }
+        return (IntMaxShuffle) iotaShuffleTemplate(start, step, wrap);
     }
 
     @Override
     @ForceInline
-    IntMaxShuffle shuffleFromBytes(byte[] reorder) { return new IntMaxShuffle(reorder); }
-
-    @Override
-    @ForceInline
-    IntMaxShuffle shuffleFromArray(int[] indexes, int i) { return new IntMaxShuffle(indexes, i); }
+    IntMaxShuffle shuffleFromArray(int[] indices, int i) { return new IntMaxShuffle(indices, i); }
 
     @Override
     @ForceInline
@@ -236,8 +227,8 @@ final class IntMaxVector extends IntVector {
 
     @ForceInline
     final @Override
-    int rOp(int v, FBinOp f) {
-        return super.rOpTemplate(v, f);  // specialize
+    int rOp(int v, VectorMask<Integer> m, FBinOp f) {
+        return super.rOpTemplate(v, m, f);  // specialize
     }
 
     @Override
@@ -275,8 +266,20 @@ final class IntMaxVector extends IntVector {
 
     @Override
     @ForceInline
+    public IntMaxVector lanewise(Unary op, VectorMask<Integer> m) {
+        return (IntMaxVector) super.lanewiseTemplate(op, IntMaxMask.class, (IntMaxMask) m);  // specialize
+    }
+
+    @Override
+    @ForceInline
     public IntMaxVector lanewise(Binary op, Vector<Integer> v) {
         return (IntMaxVector) super.lanewiseTemplate(op, v);  // specialize
+    }
+
+    @Override
+    @ForceInline
+    public IntMaxVector lanewise(Binary op, Vector<Integer> v, VectorMask<Integer> m) {
+        return (IntMaxVector) super.lanewiseTemplate(op, IntMaxMask.class, v, (IntMaxMask) m);  // specialize
     }
 
     /*package-private*/
@@ -288,11 +291,26 @@ final class IntMaxVector extends IntVector {
 
     /*package-private*/
     @Override
+    @ForceInline IntMaxVector
+    lanewiseShift(VectorOperators.Binary op, int e, VectorMask<Integer> m) {
+        return (IntMaxVector) super.lanewiseShiftTemplate(op, IntMaxMask.class, e, (IntMaxMask) m);  // specialize
+    }
+
+    /*package-private*/
+    @Override
     @ForceInline
     public final
     IntMaxVector
-    lanewise(VectorOperators.Ternary op, Vector<Integer> v1, Vector<Integer> v2) {
+    lanewise(Ternary op, Vector<Integer> v1, Vector<Integer> v2) {
         return (IntMaxVector) super.lanewiseTemplate(op, v1, v2);  // specialize
+    }
+
+    @Override
+    @ForceInline
+    public final
+    IntMaxVector
+    lanewise(Ternary op, Vector<Integer> v1, Vector<Integer> v2, VectorMask<Integer> m) {
+        return (IntMaxVector) super.lanewiseTemplate(op, IntMaxMask.class, v1, v2, (IntMaxMask) m);  // specialize
     }
 
     @Override
@@ -314,7 +332,7 @@ final class IntMaxVector extends IntVector {
     @ForceInline
     public final int reduceLanes(VectorOperators.Associative op,
                                     VectorMask<Integer> m) {
-        return super.reduceLanesTemplate(op, m);  // specialized
+        return super.reduceLanesTemplate(op, IntMaxMask.class, (IntMaxMask) m);  // specialized
     }
 
     @Override
@@ -327,12 +345,19 @@ final class IntMaxVector extends IntVector {
     @ForceInline
     public final long reduceLanesToLong(VectorOperators.Associative op,
                                         VectorMask<Integer> m) {
-        return (long) super.reduceLanesTemplate(op, m);  // specialized
+        return (long) super.reduceLanesTemplate(op, IntMaxMask.class, (IntMaxMask) m);  // specialized
     }
 
+    @Override
     @ForceInline
-    public VectorShuffle<Integer> toShuffle() {
-        return super.toShuffleTemplate(IntMaxShuffle.class); // specialize
+    final <F> VectorShuffle<F> bitsToShuffle(AbstractSpecies<F> dsp) {
+        return bitsToShuffleTemplate(dsp);
+    }
+
+    @Override
+    @ForceInline
+    public final IntMaxShuffle toShuffle() {
+        return (IntMaxShuffle) toShuffle(vspecies(), false);
     }
 
     // Specialized unary testing
@@ -341,6 +366,12 @@ final class IntMaxVector extends IntVector {
     @ForceInline
     public final IntMaxMask test(Test op) {
         return super.testTemplate(IntMaxMask.class, op);  // specialize
+    }
+
+    @Override
+    @ForceInline
+    public final IntMaxMask test(Test op, VectorMask<Integer> m) {
+        return super.testTemplate(IntMaxMask.class, op, (IntMaxMask) m);  // specialize
     }
 
     // Specialized comparisons
@@ -362,6 +393,13 @@ final class IntMaxVector extends IntVector {
     public final IntMaxMask compare(Comparison op, long s) {
         return super.compareTemplate(IntMaxMask.class, op, s);  // specialize
     }
+
+    @Override
+    @ForceInline
+    public final IntMaxMask compare(Comparison op, Vector<Integer> v, VectorMask<Integer> m) {
+        return super.compareTemplate(IntMaxMask.class, op, v, (IntMaxMask) m);
+    }
+
 
     @Override
     @ForceInline
@@ -419,6 +457,7 @@ final class IntMaxVector extends IntVector {
                                   VectorMask<Integer> m) {
         return (IntMaxVector)
             super.rearrangeTemplate(IntMaxShuffle.class,
+                                    IntMaxMask.class,
                                     (IntMaxShuffle) shuffle,
                                     (IntMaxMask) m);  // specialize
     }
@@ -435,6 +474,22 @@ final class IntMaxVector extends IntVector {
 
     @Override
     @ForceInline
+    public IntMaxVector compress(VectorMask<Integer> m) {
+        return (IntMaxVector)
+            super.compressTemplate(IntMaxMask.class,
+                                   (IntMaxMask) m);  // specialize
+    }
+
+    @Override
+    @ForceInline
+    public IntMaxVector expand(VectorMask<Integer> m) {
+        return (IntMaxVector)
+            super.expandTemplate(IntMaxMask.class,
+                                   (IntMaxMask) m);  // specialize
+    }
+
+    @Override
+    @ForceInline
     public IntMaxVector selectFrom(Vector<Integer> v) {
         return (IntMaxVector)
             super.selectFromTemplate((IntMaxVector) v);  // specialize
@@ -446,9 +501,16 @@ final class IntMaxVector extends IntVector {
                                    VectorMask<Integer> m) {
         return (IntMaxVector)
             super.selectFromTemplate((IntMaxVector) v,
-                                     (IntMaxMask) m);  // specialize
+                                     IntMaxMask.class, (IntMaxMask) m);  // specialize
     }
 
+    @Override
+    @ForceInline
+    public IntMaxVector selectFrom(Vector<Integer> v1,
+                                   Vector<Integer> v2) {
+        return (IntMaxVector)
+            super.selectFromTemplate((IntMaxVector) v1, (IntMaxVector) v2);  // specialize
+    }
 
     @ForceInline
     @Override
@@ -582,24 +644,21 @@ final class IntMaxVector extends IntVector {
             AbstractSpecies<E> species = (AbstractSpecies<E>) dsp;
             if (length() != species.laneCount())
                 throw new IllegalArgumentException("VectorMask length and species length differ");
-            if (VSIZE == species.vectorBitSize()) {
-                Class<?> dtype = species.elementType();
-                Class<?> dmtype = species.maskType();
-                return VectorSupport.convert(VectorSupport.VECTOR_OP_REINTERPRET,
-                    this.getClass(), ETYPE, VLENGTH,
-                    dmtype, dtype, VLENGTH,
-                    this, species,
-                    IntMaxMask::defaultMaskCast);
-            }
-            return this.defaultMaskCast(species);
+
+            return VectorSupport.convert(VectorSupport.VECTOR_OP_CAST,
+                this.getClass(), ETYPE, VLENGTH,
+                species.maskType(), species.elementType(), VLENGTH,
+                this, species,
+                (m, s) -> s.maskFactory(m.toArray()).check(s));
         }
 
         @Override
         @ForceInline
-        public IntMaxMask eq(VectorMask<Integer> mask) {
-            Objects.requireNonNull(mask);
-            IntMaxMask m = (IntMaxMask)mask;
-            return xor(m.not());
+        /*package-private*/
+        IntMaxMask indexPartiallyInUpperRange(long offset, long limit) {
+            return (IntMaxMask) VectorSupport.indexPartiallyInUpperRange(
+                IntMaxMask.class, int.class, VLENGTH, offset, limit,
+                (o, l) -> (IntMaxMask) TRUE_MASK.indexPartiallyInRange(o, l));
         }
 
         // Unary operations
@@ -610,6 +669,15 @@ final class IntMaxVector extends IntVector {
             return xor(maskAll(true));
         }
 
+        @Override
+        @ForceInline
+        public IntMaxMask compress() {
+            return (IntMaxMask)VectorSupport.compressExpandOp(VectorSupport.VECTOR_OP_MASK_COMPRESS,
+                IntMaxVector.class, IntMaxMask.class, ETYPE, VLENGTH, null, this,
+                (v1, m1) -> VSPECIES.iota().compare(VectorOperators.LT, m1.trueCount()));
+        }
+
+
         // Binary operations
 
         @Override
@@ -617,9 +685,9 @@ final class IntMaxVector extends IntVector {
         public IntMaxMask and(VectorMask<Integer> mask) {
             Objects.requireNonNull(mask);
             IntMaxMask m = (IntMaxMask)mask;
-            return VectorSupport.binaryOp(VECTOR_OP_AND, IntMaxMask.class, int.class, VLENGTH,
-                                             this, m,
-                                             (m1, m2) -> m1.bOp(m2, (i, a, b) -> a & b));
+            return VectorSupport.binaryOp(VECTOR_OP_AND, IntMaxMask.class, null, int.class, VLENGTH,
+                                          this, m, null,
+                                          (m1, m2, vm) -> m1.bOp(m2, (i, a, b) -> a & b));
         }
 
         @Override
@@ -627,19 +695,19 @@ final class IntMaxVector extends IntVector {
         public IntMaxMask or(VectorMask<Integer> mask) {
             Objects.requireNonNull(mask);
             IntMaxMask m = (IntMaxMask)mask;
-            return VectorSupport.binaryOp(VECTOR_OP_OR, IntMaxMask.class, int.class, VLENGTH,
-                                             this, m,
-                                             (m1, m2) -> m1.bOp(m2, (i, a, b) -> a | b));
+            return VectorSupport.binaryOp(VECTOR_OP_OR, IntMaxMask.class, null, int.class, VLENGTH,
+                                          this, m, null,
+                                          (m1, m2, vm) -> m1.bOp(m2, (i, a, b) -> a | b));
         }
 
+        @Override
         @ForceInline
-        /* package-private */
-        IntMaxMask xor(VectorMask<Integer> mask) {
+        public IntMaxMask xor(VectorMask<Integer> mask) {
             Objects.requireNonNull(mask);
             IntMaxMask m = (IntMaxMask)mask;
-            return VectorSupport.binaryOp(VECTOR_OP_XOR, IntMaxMask.class, int.class, VLENGTH,
-                                          this, m,
-                                          (m1, m2) -> m1.bOp(m2, (i, a, b) -> a ^ b));
+            return VectorSupport.binaryOp(VECTOR_OP_XOR, IntMaxMask.class, null, int.class, VLENGTH,
+                                          this, m, null,
+                                          (m1, m2, vm) -> m1.bOp(m2, (i, a, b) -> a ^ b));
         }
 
         // Mask Query operations
@@ -647,22 +715,42 @@ final class IntMaxVector extends IntVector {
         @Override
         @ForceInline
         public int trueCount() {
-            return VectorSupport.maskReductionCoerced(VECTOR_OP_MASK_TRUECOUNT, IntMaxMask.class, int.class, VLENGTH, this,
-                                                      (m) -> trueCountHelper(((IntMaxMask)m).getBits()));
+            return (int) VectorSupport.maskReductionCoerced(VECTOR_OP_MASK_TRUECOUNT, IntMaxMask.class, int.class, VLENGTH, this,
+                                                      (m) -> trueCountHelper(m.getBits()));
         }
 
         @Override
         @ForceInline
         public int firstTrue() {
-            return VectorSupport.maskReductionCoerced(VECTOR_OP_MASK_FIRSTTRUE, IntMaxMask.class, int.class, VLENGTH, this,
-                                                      (m) -> firstTrueHelper(((IntMaxMask)m).getBits()));
+            return (int) VectorSupport.maskReductionCoerced(VECTOR_OP_MASK_FIRSTTRUE, IntMaxMask.class, int.class, VLENGTH, this,
+                                                      (m) -> firstTrueHelper(m.getBits()));
         }
 
         @Override
         @ForceInline
         public int lastTrue() {
-            return VectorSupport.maskReductionCoerced(VECTOR_OP_MASK_LASTTRUE, IntMaxMask.class, int.class, VLENGTH, this,
-                                                      (m) -> lastTrueHelper(((IntMaxMask)m).getBits()));
+            return (int) VectorSupport.maskReductionCoerced(VECTOR_OP_MASK_LASTTRUE, IntMaxMask.class, int.class, VLENGTH, this,
+                                                      (m) -> lastTrueHelper(m.getBits()));
+        }
+
+        @Override
+        @ForceInline
+        public long toLong() {
+            if (length() > Long.SIZE) {
+                throw new UnsupportedOperationException("too many lanes for one long");
+            }
+            return VectorSupport.maskReductionCoerced(VECTOR_OP_MASK_TOLONG, IntMaxMask.class, int.class, VLENGTH, this,
+                                                      (m) -> toLongHelper(m.getBits()));
+        }
+
+        // laneIsSet
+
+        @Override
+        @ForceInline
+        public boolean laneIsSet(int i) {
+            Objects.checkIndex(i, length());
+            return VectorSupport.extract(IntMaxMask.class, int.class, VLENGTH,
+                                         this, i, (m, idx) -> (m.getBits()[idx] ? 1L : 0L)) == 1L;
         }
 
         // Reductions
@@ -686,9 +774,9 @@ final class IntMaxVector extends IntVector {
         @ForceInline
         /*package-private*/
         static IntMaxMask maskAll(boolean bit) {
-            return VectorSupport.broadcastCoerced(IntMaxMask.class, int.class, VLENGTH,
-                                                  (bit ? -1 : 0), null,
-                                                  (v, __) -> (v != 0 ? TRUE_MASK : FALSE_MASK));
+            return VectorSupport.fromBitsCoerced(IntMaxMask.class, int.class, VLENGTH,
+                                                 (bit ? -1 : 0), MODE_BROADCAST, null,
+                                                 (v, __) -> (v != 0 ? TRUE_MASK : FALSE_MASK));
         }
         private static final IntMaxMask  TRUE_MASK = new IntMaxMask(true);
         private static final IntMaxMask FALSE_MASK = new IntMaxMask(false);
@@ -712,23 +800,26 @@ final class IntMaxVector extends IntVector {
         static final int VLENGTH = VSPECIES.laneCount();    // used by the JVM
         static final Class<Integer> ETYPE = int.class; // used by the JVM
 
-        IntMaxShuffle(byte[] reorder) {
-            super(VLENGTH, reorder);
+        IntMaxShuffle(int[] indices) {
+            super(indices);
+            assert(VLENGTH == indices.length);
+            assert(indicesInRange(indices));
         }
 
-        public IntMaxShuffle(int[] reorder) {
-            super(VLENGTH, reorder);
+        IntMaxShuffle(int[] indices, int i) {
+            this(prepare(indices, i));
         }
 
-        public IntMaxShuffle(int[] reorder, int i) {
-            super(VLENGTH, reorder, i);
+        IntMaxShuffle(IntUnaryOperator fn) {
+            this(prepare(fn));
         }
 
-        public IntMaxShuffle(IntUnaryOperator fn) {
-            super(VLENGTH, fn);
+        int[] indices() {
+            return (int[])getPayload();
         }
 
         @Override
+        @ForceInline
         public IntSpecies vspecies() {
             return VSPECIES;
         }
@@ -736,40 +827,98 @@ final class IntMaxVector extends IntVector {
         static {
             // There must be enough bits in the shuffle lanes to encode
             // VLENGTH valid indexes and VLENGTH exceptional ones.
-            assert(VLENGTH < Byte.MAX_VALUE);
-            assert(Byte.MIN_VALUE <= -VLENGTH);
+            assert(VLENGTH < Integer.MAX_VALUE);
+            assert(Integer.MIN_VALUE <= -VLENGTH);
         }
         static final IntMaxShuffle IOTA = new IntMaxShuffle(IDENTITY);
 
         @Override
         @ForceInline
         public IntMaxVector toVector() {
-            return VectorSupport.shuffleToVector(VCLASS, ETYPE, IntMaxShuffle.class, this, VLENGTH,
-                                                    (s) -> ((IntMaxVector)(((AbstractShuffle<Integer>)(s)).toVectorTemplate())));
+            return toBitsVector();
         }
 
         @Override
         @ForceInline
-        public <F> VectorShuffle<F> cast(VectorSpecies<F> s) {
-            AbstractSpecies<F> species = (AbstractSpecies<F>) s;
-            if (length() != species.laneCount())
-                throw new IllegalArgumentException("VectorShuffle length and species length differ");
-            int[] shuffleArray = toArray();
-            return s.shuffleFromArray(shuffleArray, 0).check(s);
+        IntMaxVector toBitsVector() {
+            return (IntMaxVector) super.toBitsVectorTemplate();
+        }
+
+        @Override
+        IntMaxVector toBitsVector0() {
+            return ((IntMaxVector) vspecies().asIntegral().dummyVector()).vectorFactory(indices());
+        }
+
+        @Override
+        @ForceInline
+        public int laneSource(int i) {
+            return (int)toBitsVector().lane(i);
+        }
+
+        @Override
+        @ForceInline
+        public void intoArray(int[] a, int offset) {
+            toBitsVector().intoArray(a, offset);
+        }
+
+        @Override
+        @ForceInline
+        public final IntMaxMask laneIsValid() {
+            return (IntMaxMask) toBitsVector().compare(VectorOperators.GE, 0)
+                    .cast(vspecies());
         }
 
         @ForceInline
         @Override
-        public IntMaxShuffle rearrange(VectorShuffle<Integer> shuffle) {
-            IntMaxShuffle s = (IntMaxShuffle) shuffle;
-            byte[] reorder1 = reorder();
-            byte[] reorder2 = s.reorder();
-            byte[] r = new byte[reorder1.length];
-            for (int i = 0; i < reorder1.length; i++) {
-                int ssi = reorder2[i];
-                r[i] = reorder1[ssi];  // throws on exceptional index
+        public final IntMaxShuffle rearrange(VectorShuffle<Integer> shuffle) {
+            IntMaxShuffle concreteShuffle = (IntMaxShuffle) shuffle;
+            return (IntMaxShuffle) toBitsVector().rearrange(concreteShuffle)
+                    .toShuffle(vspecies(), false);
+        }
+
+        @ForceInline
+        @Override
+        public final IntMaxShuffle wrapIndexes() {
+            IntMaxVector v = toBitsVector();
+            if ((length() & (length() - 1)) == 0) {
+                v = (IntMaxVector) v.lanewise(VectorOperators.AND, length() - 1);
+            } else {
+                v = (IntMaxVector) v.blend(v.lanewise(VectorOperators.ADD, length()),
+                            v.compare(VectorOperators.LT, 0));
             }
-            return new IntMaxShuffle(r);
+            return (IntMaxShuffle) v.toShuffle(vspecies(), false);
+        }
+
+        private static int[] prepare(int[] indices, int offset) {
+            int[] a = new int[VLENGTH];
+            for (int i = 0; i < VLENGTH; i++) {
+                int si = indices[offset + i];
+                si = partiallyWrapIndex(si, VLENGTH);
+                a[i] = (int)si;
+            }
+            return a;
+        }
+
+        private static int[] prepare(IntUnaryOperator f) {
+            int[] a = new int[VLENGTH];
+            for (int i = 0; i < VLENGTH; i++) {
+                int si = f.applyAsInt(i);
+                si = partiallyWrapIndex(si, VLENGTH);
+                a[i] = (int)si;
+            }
+            return a;
+        }
+
+        private static boolean indicesInRange(int[] indices) {
+            int length = indices.length;
+            for (int si : indices) {
+                if (si >= (int)length || si < (int)(-length)) {
+                    String msg = ("index "+si+"out of range ["+length+"] in "+
+                                  java.util.Arrays.toString(indices));
+                    throw new AssertionError(msg);
+                }
+            }
+            return true;
         }
     }
 
@@ -784,20 +933,34 @@ final class IntMaxVector extends IntVector {
         return super.fromArray0Template(a, offset);  // specialize
     }
 
-
-
     @ForceInline
     @Override
     final
-    IntVector fromByteArray0(byte[] a, int offset) {
-        return super.fromByteArray0Template(a, offset);  // specialize
+    IntVector fromArray0(int[] a, int offset, VectorMask<Integer> m, int offsetInRange) {
+        return super.fromArray0Template(IntMaxMask.class, a, offset, (IntMaxMask) m, offsetInRange);  // specialize
     }
 
     @ForceInline
     @Override
     final
-    IntVector fromByteBuffer0(ByteBuffer bb, int offset) {
-        return super.fromByteBuffer0Template(bb, offset);  // specialize
+    IntVector fromArray0(int[] a, int offset, int[] indexMap, int mapOffset, VectorMask<Integer> m) {
+        return super.fromArray0Template(IntMaxMask.class, a, offset, indexMap, mapOffset, (IntMaxMask) m);
+    }
+
+
+
+    @ForceInline
+    @Override
+    final
+    IntVector fromMemorySegment0(MemorySegment ms, long offset) {
+        return super.fromMemorySegment0Template(ms, offset);  // specialize
+    }
+
+    @ForceInline
+    @Override
+    final
+    IntVector fromMemorySegment0(MemorySegment ms, long offset, VectorMask<Integer> m, int offsetInRange) {
+        return super.fromMemorySegment0Template(IntMaxMask.class, ms, offset, (IntMaxMask) m, offsetInRange);  // specialize
     }
 
     @ForceInline
@@ -810,12 +973,29 @@ final class IntMaxVector extends IntVector {
     @ForceInline
     @Override
     final
-    void intoByteArray0(byte[] a, int offset) {
-        super.intoByteArray0Template(a, offset);  // specialize
+    void intoArray0(int[] a, int offset, VectorMask<Integer> m) {
+        super.intoArray0Template(IntMaxMask.class, a, offset, (IntMaxMask) m);
     }
+
+    @ForceInline
+    @Override
+    final
+    void intoArray0(int[] a, int offset, int[] indexMap, int mapOffset, VectorMask<Integer> m) {
+        super.intoArray0Template(IntMaxMask.class, a, offset, indexMap, mapOffset, (IntMaxMask) m);
+    }
+
+
+    @ForceInline
+    @Override
+    final
+    void intoMemorySegment0(MemorySegment ms, long offset, VectorMask<Integer> m) {
+        super.intoMemorySegment0Template(IntMaxMask.class, ms, offset, (IntMaxMask) m);
+    }
+
 
     // End of specialized low-level memory operations.
 
     // ================================================
 
 }
+

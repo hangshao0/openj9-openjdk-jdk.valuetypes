@@ -102,7 +102,7 @@ public class NoAbortForBadClassFile extends TestRunner {
                 .getOutputLines(Task.OutputKind.DIRECT);
 
         List<String> expectedOut = Arrays.asList(
-                "Test.java:1:57: compiler.err.cant.access: test.Broken, (compiler.misc.bad.class.file.header: Broken.class, (compiler.misc.class.file.wrong.class: java.lang.AutoCloseable))",
+                "Test.java:1:57: compiler.err.cant.access: test.Broken, (compiler.misc.bad.class.file.header: Broken.class, (compiler.misc.bad.class.truncated.at.offset: 0))",
                  "Test.java:1:73: compiler.err.cant.resolve.location.args: kindname.method, unknown, , , (compiler.misc.location: kindname.class, java.lang.String, null)",
                  "2 errors"
         );
@@ -213,7 +213,7 @@ public class NoAbortForBadClassFile extends TestRunner {
 
             long flags = sym.flags_field;
 
-            flags &= ~(Flags.CLASS_SEEN | Flags.SOURCE_SEEN);
+            flags &= ~(Flags.CLASS_SEEN | Flags.SOURCE_SEEN | Flags.IDENTITY_TYPE); // earlier ACC_SUPER was dropped by javac.
 
             result.add("sym: " + sym.flatname + ", " + sym.owner.flatName() +
                        ", " + sym.type + ", " + sym.members_field + ", " + flags);

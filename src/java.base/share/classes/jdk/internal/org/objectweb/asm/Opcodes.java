@@ -56,6 +56,7 @@
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF
  * THE POSSIBILITY OF SUCH DAMAGE.
  */
+
 package jdk.internal.org.objectweb.asm;
 
 /**
@@ -79,14 +80,7 @@ public interface Opcodes {
     int ASM6 = 6 << 16 | 0 << 8;
     int ASM7 = 7 << 16 | 0 << 8;
     int ASM8 = 8 << 16 | 0 << 8;
-
-    /**
-      * <i>Experimental, use at your own risk. This field will be renamed when it becomes stable, this
-      * will break existing code using it. Only code compiled with --enable-preview can use this.</i>
-      *
-      * @deprecated This API is experimental.
-      */
-    @Deprecated int ASM9_EXPERIMENTAL = 1 << 24 | 9 << 16 | 0 << 8;
+    int ASM9 = 9 << 16 | 0 << 8;
 
     /*
       * Internal flags used to redirect calls to deprecated methods. For instance, if a visitOldStuff
@@ -163,7 +157,7 @@ public interface Opcodes {
       * <pre>
       * public class StuffVisitor {
       *   &#64;Deprecated public void visitOldStuff(int arg, ...) {
-      *     visitNewStuf(arg | SOURCE_DEPRECATED, ...);
+      *     visitNewStuff(arg | SOURCE_DEPRECATED, ...);
       *   }
       *   public void visitNewStuff(int argAndSource...) {
       *     if ((argAndSource & SOURCE_DEPRECATED) == 0) {
@@ -185,7 +179,7 @@ public interface Opcodes {
       * <p>and there are two cases:
       *
       * <ul>
-      *   <li>call visitOldSuff: in the call to super.visitOldStuff, the source is set to
+      *   <li>call visitOldStuff: in the call to super.visitOldStuff, the source is set to
       *       SOURCE_DEPRECATED and visitNewStuff is called. Here 'do stuff' is run because the source
       *       was previously set to SOURCE_DEPRECATED, and execution eventually returns to
       *       UserStuffVisitor.visitOldStuff, where 'do user stuff' is run.
@@ -314,6 +308,13 @@ public interface Opcodes {
     int V16 = 0 << 16 | 60;
     int V17 = 0 << 16 | 61;
     int V18 = 0 << 16 | 62;
+    int V19 = 0 << 16 | 63;
+    int V20 = 0 << 16 | 64;
+    int V21 = 0 << 16 | 65;
+    int V22 = 0 << 16 | 66;
+    int V23 = 0 << 16 | 67;
+    int V24 = 0 << 16 | 68;
+    int V25 = 0 << 16 | 69;
 
     /**
       * Version flag indicating that the class is using 'preview' features.
@@ -335,6 +336,7 @@ public interface Opcodes {
     int ACC_STATIC = 0x0008; // field, method
     int ACC_FINAL = 0x0010; // class, field, method, parameter
     int ACC_SUPER = 0x0020; // class
+    int ACC_IDENTITY = 0x0020; // class
     int ACC_SYNCHRONIZED = 0x0020; // method
     int ACC_OPEN = 0x0020; // module
     int ACC_TRANSITIVE = 0x0020; // module requires
@@ -344,7 +346,6 @@ public interface Opcodes {
     int ACC_VARARGS = 0x0080; // method
     int ACC_TRANSIENT = 0x0080; // field
     int ACC_NATIVE = 0x0100; // method
-    int ACC_INLINE = 0x0100; // inline class
     int ACC_INTERFACE = 0x0200; // class
     int ACC_ABSTRACT = 0x0400; // class, method
     int ACC_STRICT = 0x0800; // method
@@ -589,6 +590,4 @@ public interface Opcodes {
     int MULTIANEWARRAY = 197; // visitMultiANewArrayInsn
     int IFNULL = 198; // visitJumpInsn
     int IFNONNULL = 199; // -
-    int DEFAULT = 203; // visitTypeInsn
-    int WITHFIELD = 204; // visitFieldInsn
 }

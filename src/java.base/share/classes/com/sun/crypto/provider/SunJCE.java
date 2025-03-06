@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,16 +24,14 @@
  */
 /*
  * ===========================================================================
- * (c) Copyright IBM Corp. 2018, 2021 All Rights Reserved
+ * (c) Copyright IBM Corp. 2018, 2024 All Rights Reserved
  * ===========================================================================
  */
 
 package com.sun.crypto.provider;
 
-import java.security.AccessController;
 import java.security.Provider;
 import java.security.SecureRandom;
-import java.security.PrivilegedAction;
 import java.util.HashMap;
 import java.util.List;
 import static sun.security.util.SecurityConstants.PROVIDER_VER;
@@ -41,9 +39,8 @@ import static sun.security.util.SecurityProviderConstants.*;
 
 import jdk.crypto.jniprovider.NativeCrypto;
 import jdk.internal.util.StaticProperty;
-import sun.security.action.GetPropertyAction;
 
-/**
+/*
  * The "SunJCE" Cryptographic Service Provider.
  *
  * @author Jan Luehe
@@ -83,138 +80,32 @@ import sun.security.action.GetPropertyAction;
  *
  * - HMAC-MD5, HMAC-SHA1, HMAC with SHA2 family and SHA3 family of digests
  *
+ * - JCEKS KeyStore
+ *
+ * - DHKEM
+ *
+ * - ML-KEM
+ *
  */
 
 public final class SunJCE extends Provider {
 
-    /*
-     * Check system properties to see whether native crypto should be enabled.
-     * By default, the native crypto is enabled and uses the native library.
-     * The property 'jdk.nativeChaCha20' is used to control native ChaCha20 alone
-     * and 'jdk.nativeCrypto' is used to control all native crypto implementations
-     * (Digest, CBC, GCM, and ChaCha20).
+    /* The property 'jdk.nativeChaCha20' is used to control enablement of the native
+     * ChaCha20 implementation. ChaCha20 is only supported in OpenSSL 1.1.0 and above.
      */
-    private static final boolean useNativeChaCha20Cipher = nativeChaCha20Init();
+    private static final boolean useNativeChaCha20Cipher = NativeCrypto.isAlgorithmEnabled("jdk.nativeChaCha20", "NativeChaCha20Cipher");
 
-    /*
-     * Check system properties to see whether native crypto should be enabled.
-     * By default, the native crypto is enabled and uses the native library.
-     * The property 'jdk.nativeGCM' is used to control native GCM alone
-     * and 'jdk.nativeCrypto' is used to control all native crypto implementations
-     * (Digest, CBC, GCM, and ChaCha20).
+    /* The property 'jdk.nativeGCM' is used to control enablement of the native
+     * GCM implementation.
      */
-    private static final boolean useNativeGaloisCounterMode = nativeGCMInit();
-
-    private static boolean nativeChaCha20Init() {
-        boolean nativeChaCha20 = true;
-        String nativeCryptTrace = GetPropertyAction.privilegedGetProperty("jdk.nativeCryptoTrace");
-        String nativeCryptStr = GetPropertyAction.privilegedGetProperty("jdk.nativeCrypto");
-
-        if ((nativeCryptStr != null) && !Boolean.parseBoolean(nativeCryptStr)) {
-            /* nativeCrypto is explicitly disabled */
-            nativeChaCha20 = false;
-        } else {
-            String nativeChaCha20Str = GetPropertyAction.privilegedGetProperty("jdk.nativeChaCha20");
-
-            if ((nativeChaCha20Str != null) && !Boolean.parseBoolean(nativeChaCha20Str)) {
-                /* nativeChaCha20 is explicitly disabled */
-                nativeChaCha20 = false;
-            }
-        }
-
-        if (!nativeChaCha20) {
-            if (nativeCryptTrace != null) {
-                System.err.println("NativeChaCha20Cipher load - Native crypto library disabled.");
-            }
-        } else {
-            /*
-             * User wants to use the native crypto implementation.
-             * Make sure the native crypto library is loaded successfully.
-             * Otherwise, issue a warning message and fall back to the built-in
-             * java crypto implementation.
-             *
-             * ChaCha20 is only supported in OpenSSL 1.1.0 and above.
-             */
-            if (!NativeCrypto.isLoaded()) {
-                nativeChaCha20 = false;
-
-                if (nativeCryptTrace != null) {
-                    System.err.println("Warning: Native crypto library load failed." +
-                            " Using Java crypto implementation");
-                }
-            } else {
-                final int ossl_ver = NativeCrypto.getVersion();
-
-                if (ossl_ver < 1) {
-                    nativeChaCha20 = false;
-
-                    if (nativeCryptTrace != null) {
-                        System.err.println("Warning: Native ChaCha20 load failed." +
-                                " Need OpenSSL 1.1.0 or above for ChaCha20 support." +
-                                " Using Java crypto implementation");
-                    }
-                } else {
-                    if (nativeCryptTrace != null) {
-                        System.err.println("NativeChaCha20Cipher load - using Native crypto library.");
-                    }
-                }
-            }
-        }
-
-        return nativeChaCha20;
-    }
-
-    private static boolean nativeGCMInit() {
-        boolean nativeGCM = true;
-        String nativeCryptTrace = GetPropertyAction.privilegedGetProperty("jdk.nativeCryptoTrace");
-        String nativeCryptStr = GetPropertyAction.privilegedGetProperty("jdk.nativeCrypto");
-
-        if ((nativeCryptStr != null) && !Boolean.parseBoolean(nativeCryptStr)) {
-            /* nativeCrypto is explicitly disabled */
-            nativeGCM = false;
-        } else {
-            String nativeGCMStr = GetPropertyAction.privilegedGetProperty("jdk.nativeGCM");
-
-            if ((nativeGCMStr != null) && !Boolean.parseBoolean(nativeGCMStr)) {
-                /* nativeGCM is explicitly disabled */
-                nativeGCM = false;
-            }
-        }
-
-        if (!nativeGCM) {
-            if (nativeCryptTrace != null) {
-                System.err.println("NativeGaloisCounterMode load - Native crypto library disabled.");
-            }
-        } else {
-            /*
-             * User wants to use the native crypto implementation.
-             * Make sure the native crypto library is loaded successfully.
-             * Otherwise, issue a warning message and fall back to the built-in
-             * java crypto implementation.
-             */
-            if (!NativeCrypto.isLoaded()) {
-                nativeGCM = false;
-
-                if (nativeCryptTrace != null) {
-                    System.err.println("Warning: Native crypto library load failed." +
-                            " Using Java crypto implementation");
-                }
-            } else {
-                if (nativeCryptTrace != null) {
-                    System.err.println("NativeGaloisCounterMode load - using Native crypto library.");
-                }
-            }
-        }
-
-        return nativeGCM;
-    }
+    private static final boolean useNativeGaloisCounterMode = NativeCrypto.isAlgorithmEnabled("jdk.nativeGCM", "NativeGaloisCounterMode");
 
     @java.io.Serial
     private static final long serialVersionUID = 6812507587804302833L;
 
     private static final String info = "SunJCE Provider " +
     "(implements RSA, DES, Triple DES, AES, Blowfish, ARCFOUR, RC2, PBE, "
-    + "Diffie-Hellman, HMAC, ChaCha20)";
+    + "Diffie-Hellman, HMAC, ChaCha20, DHKEM, and ML-KEM)";
 
     /* Are we debugging? -- for developers */
     static final boolean debug = false;
@@ -248,24 +139,12 @@ public final class SunJCE extends Provider {
                    attrs));
     }
 
-    @SuppressWarnings("removal")
     public SunJCE() {
         /* We are the "SunJCE" provider */
         super("SunJCE", PROVIDER_VER, info);
 
-        // if there is no security manager installed, put directly into
-        // the provider
-        if (System.getSecurityManager() == null) {
-            putEntries();
-        } else {
-            AccessController.doPrivileged(new PrivilegedAction<Void>() {
-                @Override
-                public Void run() {
-                    putEntries();
-                    return null;
-                }
-            });
-        }
+        putEntries();
+
         if (instance == null) {
             instance = this;
         }
@@ -403,7 +282,7 @@ public final class SunJCE extends Provider {
         attrs.put("SupportedModes", "GCM");
         attrs.put("SupportedKeyFormats", "RAW");
 
-        if (useNativeGaloisCounterMode) {
+        if (useNativeGaloisCounterMode && NativeCrypto.isAllowedAndLoaded()) {
             ps("Cipher", "AES/GCM/NoPadding",
                     "com.sun.crypto.provider.NativeGaloisCounterMode$AESGCM", null,
                     attrs);
@@ -448,7 +327,10 @@ public final class SunJCE extends Provider {
         attrs.clear();
         attrs.put("SupportedKeyFormats", "RAW");
 
-        if (useNativeChaCha20Cipher) {
+        if (useNativeChaCha20Cipher
+            && NativeCrypto.isAlgorithmAvailable("ChaCha20")
+            && (NativeCrypto.getVersionIfAvailable() >= NativeCrypto.OPENSSL_VERSION_1_1_0)
+        ) {
             ps("Cipher", "ChaCha20",
                     "com.sun.crypto.provider.NativeChaCha20Cipher$ChaCha20Only",
                     null, attrs);
@@ -503,6 +385,13 @@ public final class SunJCE extends Provider {
         ps("Cipher", "PBEWithHmacSHA512AndAES_128",
                 "com.sun.crypto.provider.PBES2Core$HmacSHA512AndAES_128");
 
+        ps("Cipher", "PBEWithHmacSHA512/224AndAES_128",
+                "com.sun.crypto.provider.PBES2Core$HmacSHA512_224AndAES_128");
+
+        ps("Cipher", "PBEWithHmacSHA512/256AndAES_128",
+                "com.sun.crypto.provider.PBES2Core$HmacSHA512_256AndAES_128");
+
+
         ps("Cipher", "PBEWithHmacSHA1AndAES_256",
                 "com.sun.crypto.provider.PBES2Core$HmacSHA1AndAES_256");
 
@@ -517,6 +406,12 @@ public final class SunJCE extends Provider {
 
         ps("Cipher", "PBEWithHmacSHA512AndAES_256",
                 "com.sun.crypto.provider.PBES2Core$HmacSHA512AndAES_256");
+
+        ps("Cipher", "PBEWithHmacSHA512/224AndAES_256",
+                "com.sun.crypto.provider.PBES2Core$HmacSHA512_224AndAES_256");
+
+        ps("Cipher", "PBEWithHmacSHA512/256AndAES_256",
+                "com.sun.crypto.provider.PBES2Core$HmacSHA512_256AndAES_256");
 
         /*
          * Key(pair) Generator engines
@@ -597,6 +492,16 @@ public final class SunJCE extends Provider {
                 attrs);
 
         /*
+         * Key Derivation engines
+         */
+        ps("KDF", "HKDF-SHA256",
+                "com.sun.crypto.provider.HKDFKeyDerivation$HKDFSHA256");
+        ps("KDF", "HKDF-SHA384",
+                "com.sun.crypto.provider.HKDFKeyDerivation$HKDFSHA384");
+        ps("KDF", "HKDF-SHA512",
+                "com.sun.crypto.provider.HKDFKeyDerivation$HKDFSHA512");
+
+        /*
          * Algorithm Parameter engines
          */
         psA("AlgorithmParameters", "DiffieHellman",
@@ -654,6 +559,12 @@ public final class SunJCE extends Provider {
         ps("AlgorithmParameters", "PBEWithHmacSHA512AndAES_128",
                 "com.sun.crypto.provider.PBES2Parameters$HmacSHA512AndAES_128");
 
+        ps("AlgorithmParameters", "PBEWithHmacSHA512/224AndAES_128",
+                "com.sun.crypto.provider.PBES2Parameters$HmacSHA512_224AndAES_128");
+
+        ps("AlgorithmParameters", "PBEWithHmacSHA512/256AndAES_128",
+                "com.sun.crypto.provider.PBES2Parameters$HmacSHA512_256AndAES_128");
+
         ps("AlgorithmParameters", "PBEWithHmacSHA1AndAES_256",
                 "com.sun.crypto.provider.PBES2Parameters$HmacSHA1AndAES_256");
 
@@ -669,6 +580,12 @@ public final class SunJCE extends Provider {
         ps("AlgorithmParameters", "PBEWithHmacSHA512AndAES_256",
                 "com.sun.crypto.provider.PBES2Parameters$HmacSHA512AndAES_256");
 
+        ps("AlgorithmParameters", "PBEWithHmacSHA512/224AndAES_256",
+                "com.sun.crypto.provider.PBES2Parameters$HmacSHA512_224AndAES_256");
+
+        ps("AlgorithmParameters", "PBEWithHmacSHA512/256AndAES_256",
+                "com.sun.crypto.provider.PBES2Parameters$HmacSHA512_256AndAES_256");
+
         ps("AlgorithmParameters", "Blowfish",
                 "com.sun.crypto.provider.BlowfishParameters");
 
@@ -676,13 +593,13 @@ public final class SunJCE extends Provider {
                 "com.sun.crypto.provider.AESParameters", null);
 
         ps("AlgorithmParameters", "GCM",
-                "com.sun.crypto.provider.GCMParameters");
+                "sun.security.util.GCMParameters");
 
         ps("AlgorithmParameters", "RC2",
                 "com.sun.crypto.provider.RC2Parameters");
 
-        ps("AlgorithmParameters", "OAEP",
-                "com.sun.crypto.provider.OAEPParameters");
+        psA("AlgorithmParameters", "OAEP",
+                "com.sun.crypto.provider.OAEPParameters", null);
 
         psA("AlgorithmParameters", "ChaCha20-Poly1305",
                 "com.sun.crypto.provider.ChaCha20Poly1305Parameters", null);
@@ -695,7 +612,7 @@ public final class SunJCE extends Provider {
                 null);
 
         /*
-         * Secret-key factories
+         * Secret key factories
          */
         ps("SecretKeyFactory", "DES",
                 "com.sun.crypto.provider.DESKeyFactory");
@@ -751,6 +668,12 @@ public final class SunJCE extends Provider {
         ps("SecretKeyFactory", "PBEWithHmacSHA512AndAES_128",
                 "com.sun.crypto.provider.PBEKeyFactory$PBEWithHmacSHA512AndAES_128");
 
+        ps("SecretKeyFactory", "PBEWithHmacSHA512/224AndAES_128",
+                "com.sun.crypto.provider.PBEKeyFactory$PBEWithHmacSHA512_224AndAES_128");
+
+        ps("SecretKeyFactory", "PBEWithHmacSHA512/256AndAES_128",
+                "com.sun.crypto.provider.PBEKeyFactory$PBEWithHmacSHA512_256AndAES_128");
+
         ps("SecretKeyFactory", "PBEWithHmacSHA1AndAES_256",
                 "com.sun.crypto.provider.PBEKeyFactory$PBEWithHmacSHA1AndAES_256");
 
@@ -766,6 +689,12 @@ public final class SunJCE extends Provider {
         ps("SecretKeyFactory", "PBEWithHmacSHA512AndAES_256",
                 "com.sun.crypto.provider.PBEKeyFactory$PBEWithHmacSHA512AndAES_256");
 
+        ps("SecretKeyFactory", "PBEWithHmacSHA512/224AndAES_256",
+                "com.sun.crypto.provider.PBEKeyFactory$PBEWithHmacSHA512_224AndAES_256");
+
+        ps("SecretKeyFactory", "PBEWithHmacSHA512/256AndAES_256",
+                "com.sun.crypto.provider.PBEKeyFactory$PBEWithHmacSHA512_256AndAES_256");
+
         // PBKDF2
         psA("SecretKeyFactory", "PBKDF2WithHmacSHA1",
                 "com.sun.crypto.provider.PBKDF2Core$HmacSHA1",
@@ -778,6 +707,10 @@ public final class SunJCE extends Provider {
                 "com.sun.crypto.provider.PBKDF2Core$HmacSHA384");
         ps("SecretKeyFactory", "PBKDF2WithHmacSHA512",
                 "com.sun.crypto.provider.PBKDF2Core$HmacSHA512");
+        ps("SecretKeyFactory", "PBKDF2WithHmacSHA512/224",
+                "com.sun.crypto.provider.PBKDF2Core$HmacSHA512_224");
+        ps("SecretKeyFactory", "PBKDF2WithHmacSHA512/256",
+                "com.sun.crypto.provider.PBKDF2Core$HmacSHA512_256");
 
         /*
          * MAC
@@ -842,6 +775,11 @@ public final class SunJCE extends Provider {
                 "com.sun.crypto.provider.PBMAC1Core$HmacSHA384", null, attrs);
         ps("Mac", "PBEWithHmacSHA512",
                 "com.sun.crypto.provider.PBMAC1Core$HmacSHA512", null, attrs);
+        ps("Mac", "PBEWithHmacSHA512/224",
+                "com.sun.crypto.provider.PBMAC1Core$HmacSHA512_224", null, attrs);
+        ps("Mac", "PBEWithHmacSHA512/256",
+                "com.sun.crypto.provider.PBMAC1Core$HmacSHA512_256", null, attrs);
+
         ps("Mac", "SslMacMD5",
                 "com.sun.crypto.provider.SslMacCore$SslMacMD5", null, attrs);
         ps("Mac", "SslMacSHA1",
@@ -852,6 +790,32 @@ public final class SunJCE extends Provider {
          */
         ps("KeyStore", "JCEKS",
                 "com.sun.crypto.provider.JceKeyStore");
+
+        /*
+         * KEMs
+         */
+        attrs.clear();
+        attrs.put("ImplementedIn", "Software");
+        attrs.put("SupportedKeyClasses", "java.security.interfaces.ECKey" +
+                "|java.security.interfaces.XECKey");
+        ps("KEM", "DHKEM", "com.sun.crypto.provider.DHKEM", null, attrs);
+
+        attrs.clear();
+        attrs.put("ImplementedIn", "Software");
+        ps("KEM", "ML-KEM", "com.sun.crypto.provider.ML_KEM_Impls$K", null, attrs);
+        psA("KEM", "ML-KEM-512", "com.sun.crypto.provider.ML_KEM_Impls$K2", attrs);
+        psA("KEM", "ML-KEM-768", "com.sun.crypto.provider.ML_KEM_Impls$K3", attrs);
+        psA("KEM", "ML-KEM-1024", "com.sun.crypto.provider.ML_KEM_Impls$K5",attrs);
+
+        ps("KeyPairGenerator", "ML-KEM", "com.sun.crypto.provider.ML_KEM_Impls$KPG", null, attrs);
+        psA("KeyPairGenerator", "ML-KEM-512", "com.sun.crypto.provider.ML_KEM_Impls$KPG2", attrs);
+        psA("KeyPairGenerator", "ML-KEM-768", "com.sun.crypto.provider.ML_KEM_Impls$KPG3", attrs);
+        psA("KeyPairGenerator", "ML-KEM-1024", "com.sun.crypto.provider.ML_KEM_Impls$KPG5", attrs);
+
+        ps("KeyFactory", "ML-KEM", "com.sun.crypto.provider.ML_KEM_Impls$KF", null, attrs);
+        psA("KeyFactory", "ML-KEM-512", "com.sun.crypto.provider.ML_KEM_Impls$KF2", attrs);
+        psA("KeyFactory", "ML-KEM-768", "com.sun.crypto.provider.ML_KEM_Impls$KF3", attrs);
+        psA("KeyFactory", "ML-KEM-1024", "com.sun.crypto.provider.ML_KEM_Impls$KF5", attrs);
 
         /*
          * SSL/TLS mechanisms

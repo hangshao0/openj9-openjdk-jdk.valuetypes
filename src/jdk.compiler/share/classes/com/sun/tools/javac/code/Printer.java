@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2019, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2009, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -199,8 +199,10 @@ public abstract class Printer implements Type.Visitor<String, Locale>, Symbol.Vi
         List<Attribute.TypeCompound> annos = t.getAnnotationMirrors();
         if (!annos.isEmpty()) {
             if (prefix) sb.append(' ');
-            sb.append(annos);
-            sb.append(' ');
+            for (Attribute.TypeCompound anno : annos) {
+                sb.append(anno);
+                sb.append(' ');
+            }
         }
         return sb.toString();
     }
@@ -234,18 +236,6 @@ public abstract class Printer implements Type.Visitor<String, Locale>, Symbol.Vi
             buf.append(printAnnotations(t));
             buf.append(className(t, true, locale));
         }
-        try {
-            if (t.isReferenceProjection()) {
-                buf.append('.');
-                buf.append(t.tsym.name.table.names.ref);
-            } else if (t.isValueProjection()) {
-                buf.append('.');
-                buf.append(t.tsym.name.table.names.val);
-            }
-        } catch (CompletionFailure cf) {
-            // don't let missing types capsize the boat.
-        }
-
         if (t.getTypeArguments().nonEmpty()) {
             buf.append('<');
             buf.append(visitTypes(t.getTypeArguments(), locale));
@@ -330,15 +320,11 @@ public abstract class Printer implements Type.Visitor<String, Locale>, Symbol.Vi
                         visit(norm.supertype_field, locale));
             }
             return s;
-        }
-        String s;
-        if (longform) {
-             s =  sym.getQualifiedName().toString();
+        } else if (longform) {
+            return sym.getQualifiedName().toString();
         } else {
-            s =  sym.name.toString();
+            return sym.name.toString();
         }
-
-        return s;
     }
 
     /**

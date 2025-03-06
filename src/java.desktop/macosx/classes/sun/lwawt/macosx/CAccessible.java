@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -28,6 +28,7 @@ package sun.lwawt.macosx;
 import java.awt.Component;
 import java.beans.PropertyChangeEvent;
 import java.beans.PropertyChangeListener;
+import java.util.Objects;
 
 import javax.accessibility.Accessible;
 import javax.accessibility.AccessibleContext;
@@ -73,6 +74,8 @@ class CAccessible extends CFRetainedResource implements Accessible {
     private static native void menuItemSelected(long ptr);
     private static native void treeNodeExpanded(long ptr);
     private static native void treeNodeCollapsed(long ptr);
+    private static native void selectedCellsChanged(long ptr);
+    private static native void tableContentCacheClear(long ptr);
 
     private Accessible accessible;
 
@@ -123,9 +126,29 @@ class CAccessible extends CFRetainedResource implements Accessible {
                     selectionChanged(ptr);
                 } else if (name.equals(ACCESSIBLE_TABLE_MODEL_CHANGED)) {
                     valueChanged(ptr);
+                    if (CAccessible.getSwingAccessible(CAccessible.this) != null) {
+                        Accessible a = CAccessible.getSwingAccessible(CAccessible.this);
+                        AccessibleContext ac = a.getAccessibleContext();
+                        if ((ac != null) && (ac.getAccessibleRole() == AccessibleRole.TABLE)) {
+                            tableContentCacheClear(ptr);
+                        }
+                    }
                 } else if (name.equals(ACCESSIBLE_ACTIVE_DESCENDANT_PROPERTY)) {
                     if (newValue instanceof AccessibleContext) {
                         activeDescendant = (AccessibleContext)newValue;
+                        if (newValue instanceof Accessible) {
+                            Accessible a = (Accessible)newValue;
+                            AccessibleContext ac = a.getAccessibleContext();
+                            if (ac !=  null) {
+                                Accessible p = ac.getAccessibleParent();
+                                if (p != null) {
+                                    AccessibleContext pac = p.getAccessibleContext();
+                                    if ((pac != null) && (pac.getAccessibleRole() == AccessibleRole.TABLE)) {
+                                        selectedCellsChanged(ptr);
+                                    }
+                                }
+                            }
+                        }
                     }
                 } else if (name.equals(ACCESSIBLE_STATE_PROPERTY)) {
                     AccessibleContext thisAC = accessible.getAccessibleContext();
@@ -142,30 +165,53 @@ class CAccessible extends CFRetainedResource implements Accessible {
                         treeNodeCollapsed(ptr);
                     }
 
-                    // At least for now don't handle combo box menu state changes.
-                    // This may change when later fixing issues which currently
-                    // exist for combo boxes, but for now the following is only
-                    // for JPopupMenus, not for combobox menus.
-                    if (parentRole != AccessibleRole.COMBO_BOX) {
-                        if (thisRole == AccessibleRole.POPUP_MENU) {
-                            if ( newValue != null &&
-                                 ((AccessibleState)newValue) == AccessibleState.VISIBLE ) {
-                                    menuOpened(ptr);
-                            } else if ( oldValue != null &&
-                                        ((AccessibleState)oldValue) == AccessibleState.VISIBLE ) {
-                                menuClosed(ptr);
-                            }
-                        } else if (thisRole == AccessibleRole.MENU_ITEM) {
-                            if ( newValue != null &&
-                                 ((AccessibleState)newValue) == AccessibleState.FOCUSED ) {
-                                menuItemSelected(ptr);
-                            }
+                    if (thisRole == AccessibleRole.POPUP_MENU) {
+                        if ( newValue != null &&
+                                ((AccessibleState)newValue) == AccessibleState.VISIBLE ) {
+                            menuOpened(ptr);
+                        } else if ( oldValue != null &&
+                                ((AccessibleState)oldValue) == AccessibleState.VISIBLE ) {
+                            menuClosed(ptr);
+                        }
+                    } else if (thisRole == AccessibleRole.MENU_ITEM ||
+                            (thisRole == AccessibleRole.MENU)) {
+                        if ( newValue != null &&
+                                ((AccessibleState)newValue) == AccessibleState.FOCUSED ) {
+                            menuItemSelected(ptr);
                         }
                     }
 
                     // Do send check box state changes to native side
                     if (thisRole == AccessibleRole.CHECK_BOX) {
-                        valueChanged(ptr);
+                        if (!Objects.equals(newValue, oldValue)) {
+                            valueChanged(ptr);
+                        }
+
+                        // Notify native side to handle check box style menuitem
+                        if (parentRole == AccessibleRole.POPUP_MENU && newValue != null
+                                && ((AccessibleState)newValue) == AccessibleState.FOCUSED) {
+                            menuItemSelected(ptr);
+                        }
+                    }
+
+                    // Do send radio button state changes to native side
+                    if (thisRole == AccessibleRole.RADIO_BUTTON) {
+                        if (newValue != null && !newValue.equals(oldValue)) {
+                            valueChanged(ptr);
+                        }
+
+                        // Notify native side to handle radio button style menuitem
+                        if (parentRole == AccessibleRole.POPUP_MENU && newValue != null
+                            && ((AccessibleState)newValue) == AccessibleState.FOCUSED) {
+                            menuItemSelected(ptr);
+                        }
+                    }
+
+                    // Do send toggle button state changes to native side
+                    if (thisRole == AccessibleRole.TOGGLE_BUTTON) {
+                        if (!Objects.equals(newValue, oldValue)) {
+                            valueChanged(ptr);
+                        }
                     }
                 } else if (name.equals(ACCESSIBLE_NAME_PROPERTY)) {
                     //for now trigger only for JTabbedPane.
@@ -183,7 +229,6 @@ class CAccessible extends CFRetainedResource implements Accessible {
             }
         }
     }
-
 
     static Accessible getSwingAccessible(final Accessible a) {
         return (a instanceof CAccessible) ? ((CAccessible)a).accessible : a;

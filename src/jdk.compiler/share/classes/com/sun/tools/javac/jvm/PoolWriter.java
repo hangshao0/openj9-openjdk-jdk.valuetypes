@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -33,7 +33,6 @@ import com.sun.tools.javac.code.Symbol.MethodHandleSymbol;
 import com.sun.tools.javac.code.Symbol.ModuleSymbol;
 import com.sun.tools.javac.code.Symbol.PackageSymbol;
 import com.sun.tools.javac.code.Type;
-import com.sun.tools.javac.code.Type.ConstantPoolQType;
 import com.sun.tools.javac.code.Types;
 import com.sun.tools.javac.jvm.ClassWriter.PoolOverflow;
 import com.sun.tools.javac.jvm.ClassWriter.StringOverflow;
@@ -43,6 +42,7 @@ import com.sun.tools.javac.jvm.PoolConstant.Dynamic;
 import com.sun.tools.javac.jvm.PoolConstant.Dynamic.BsmKey;
 import com.sun.tools.javac.jvm.PoolConstant.NameAndType;
 import com.sun.tools.javac.util.ByteBuffer;
+import com.sun.tools.javac.util.InvalidUtfException;
 import com.sun.tools.javac.util.List;
 import com.sun.tools.javac.util.Name;
 import com.sun.tools.javac.util.Names;
@@ -51,9 +51,11 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.util.ArrayDeque;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.Map;
+import java.util.Set;
 
 import static com.sun.tools.javac.code.Kinds.Kind.TYP;
 import static com.sun.tools.javac.code.TypeTag.ARRAY;
@@ -94,13 +96,15 @@ public class PoolWriter {
     /** The inner classes to be written, as an ordered set (enclosing first). */
     LinkedHashSet<ClassSymbol> innerClasses = new LinkedHashSet<>();
 
+    Set<Symbol> loadableDescriptors = new HashSet<>();
+
     /** The list of entries in the BootstrapMethods attribute. */
     Map<BsmKey, Integer> bootstrapMethods = new LinkedHashMap<>();
 
     public PoolWriter(Types types, Names names) {
         this.types = types;
         this.names = names;
-        this.signatureGen = new SharedSignatureGenerator(types);
+        this.signatureGen = new SharedSignatureGenerator();
         this.pool = new WriteablePoolHelper();
     }
 
@@ -116,21 +120,7 @@ public class PoolWriter {
      * or an array type.
      */
     int putClass(Type t) {
-        /* Their is nothing to be gained by having the pair of class types Foo.ref and Foo.val
-           result in two different CONSTANT_Class_info strucures in the pool. These are
-           indistinguishable at the class file level. Hence we coalesce them here.
-        */
-        if (t.tsym.isPrimitiveClass())
-            t = t.asValueType();
         return pool.writeIfNeeded(types.erasure(t));
-    }
-
-    /**
-     * Puts a type into the pool and return its index. The type could be either a class, a type variable
-     * or an array type.
-     */
-    int putClass(ConstantPoolQType t) {
-        return pool.writeIfNeeded(t);
     }
 
     /**
@@ -246,6 +236,16 @@ public class PoolWriter {
         }
     }
 
+    /** Enter a value class into the `loadableDescriptorsClasses' set.
+     */
+    void enterLoadableDescriptorsClass(Symbol c) {
+        if (c.type.isCompound()) {
+            throw new AssertionError("Unexpected intersection type: " + c.type);
+        }
+        c.complete();
+        loadableDescriptors.add(c);
+    }
+
     /**
      * Create a new Utf8 entry representing a descriptor for given (member) symbol.
      */
@@ -292,8 +292,8 @@ public class PoolWriter {
          */
         ByteBuffer sigbuf = new ByteBuffer();
 
-        SharedSignatureGenerator(Types types) {
-            super(types);
+        SharedSignatureGenerator() {
+            types.super();
         }
 
         /**
@@ -339,7 +339,11 @@ public class PoolWriter {
         }
 
         protected Name toName() {
-            return sigbuf.toName(names);
+            try {
+                return sigbuf.toName(names);
+            } catch (InvalidUtfException e) {
+                throw new AssertionError(e);
+            }
         }
     }
 
@@ -377,10 +381,10 @@ public class PoolWriter {
             int tag = c.poolTag();
             switch (tag) {
                 case ClassFile.CONSTANT_Class: {
-                    Type ct = c instanceof ConstantPoolQType ? ((ConstantPoolQType)c).type : (Type)c;
+                    Type ct = (Type)c;
                     Name name = ct.hasTag(ARRAY) ?
                             typeSig(ct) :
-                            c instanceof ConstantPoolQType ? names.fromString("Q" + new String(externalize(ct.tsym.flatName())) + ";") : names.fromUtf(externalize(ct.tsym.flatName()));
+                            externalize(ct.tsym.flatName());
                     poolbuf.appendByte(tag);
                     poolbuf.appendChar(putName(name));
                     if (ct.hasTag(CLASS)) {
@@ -411,7 +415,7 @@ public class PoolWriter {
                 }
                 case ClassFile.CONSTANT_Package: {
                     PackageSymbol pkg = (PackageSymbol)c;
-                    Name pkgName = names.fromUtf(externalize(pkg.flatName()));
+                    Name pkgName = externalize(pkg.flatName());
                     poolbuf.appendByte(tag);
                     poolbuf.appendChar(putName(pkgName));
                     break;
@@ -517,12 +521,12 @@ public class PoolWriter {
         signatureGen.assembleSig(types.supertype(t));
         for (Type i : types.interfaces(t))
             signatureGen.assembleSig(i);
-
         return signatureGen.toName();
     }
 
     void reset() {
         innerClasses.clear();
+        loadableDescriptors.clear();
         bootstrapMethods.clear();
         pool.reset();
     }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -22,35 +22,47 @@
  */
 package runtime.valhalla.inlinetypes;
 
+import jdk.internal.value.ValueClass;
 import jdk.test.lib.Asserts;
+import jdk.internal.vm.annotation.ImplicitlyConstructible;
+import jdk.internal.vm.annotation.LooselyConsistentValue;
+import jdk.internal.vm.annotation.NullRestricted;
 
 /*
-* @test
-* @summary Test several scenarios of class initialization failures
-* @library /test/lib
-* @run main runtime.valhalla.inlinetypes.ClassInitializationFailuresTest
-
+ * @test
+ * @summary Test several scenarios of class initialization failures
+ * @library /test/lib
+ * @modules java.base/jdk.internal.vm.annotation
+ *          java.base/jdk.internal.value
+ * @enablePreview
+ * @compile ClassInitializationFailuresTest.java
+ * @run main/othervm runtime.valhalla.inlinetypes.ClassInitializationFailuresTest
 */
 public class ClassInitializationFailuresTest {
     static boolean failingInitialization = true;
     static Object bo = null;
 
-    static primitive class BadOne {
+    @ImplicitlyConstructible
+    @LooselyConsistentValue
+    static value class BadOne {
         int i = 0;
         static {
-        if (ClassInitializationFailuresTest.failingInitialization) {
-            throw new RuntimeException("Failing initialization");
-        }
+            if (ClassInitializationFailuresTest.failingInitialization) {
+                throw new RuntimeException("Failing initialization");
+            }
         }
     }
 
-    static primitive class TestClass1 {
+    @ImplicitlyConstructible
+    @LooselyConsistentValue
+    static value class TestClass1 {
+        @NullRestricted
         BadOne badField = new BadOne();
     }
 
-    // Test handling of errors during the initialization of a primitive class
+    // Test handling of errors during the initialization of a value class
     // Initialization of TestClass1 triggers the initialization of classes
-    // of all its primitive class typed fields, in this case BadOne
+    // of all its value class typed fields, in this case BadOne
     // Static initializer of BadOne throws an exception, so BadOne's initialization
     // fails, which must caused the initialization of TestClass1 to fail too
     // First attempt to instantiate TestClass1 must fail with an ExceptionInInitializerError
@@ -61,9 +73,9 @@ public class ClassInitializationFailuresTest {
     static void testClassInitialization() {
         Throwable e = null;
         try {
-        TestClass1 t1 = new TestClass1();
+            TestClass1 t1 = new TestClass1();
         } catch(Throwable t) {
-        e = t;
+            e = t;
         }
         Asserts.assertNotNull(e, "Exception should have been thrown");
         Asserts.assertTrue(e.getClass() == ExceptionInInitializerError.class, "Must be an ExceptionInInitializerError");
@@ -71,114 +83,126 @@ public class ClassInitializationFailuresTest {
         // Second attempt because it doesn't fail the same way
         e = null;
         try {
-        TestClass1 t1 = new TestClass1();
+            TestClass1 t1 = new TestClass1();
         } catch(Throwable t) {
-        e = t;
+            e = t;
         }
         Asserts.assertNotNull(e, "Error should have been thrown");
         Asserts.assertTrue(e.getClass() == NoClassDefFoundError.class, "Must be a NoClassDefFoundError");
         Asserts.assertTrue(e.getCause().getClass() == ExceptionInInitializerError.class, "Must be an ExceptionInInitializerError");
     }
 
-    static primitive class BadTwo {
+    @ImplicitlyConstructible
+    @LooselyConsistentValue
+    static value class BadTwo {
         int i = 0;
         static {
-        if (ClassInitializationFailuresTest.failingInitialization) {
-            throw new RuntimeException("Failing initialization");
-        }
+            if (ClassInitializationFailuresTest.failingInitialization) {
+                throw new RuntimeException("Failing initialization");
+            }
         }
     }
 
-    static primitive class BadThree {
+    @ImplicitlyConstructible
+    @LooselyConsistentValue
+    static value class BadThree {
         int i = 0;
         static {
-        if (ClassInitializationFailuresTest.failingInitialization) {
-            throw new RuntimeException("Failing initialization");
-        }
+            if (ClassInitializationFailuresTest.failingInitialization) {
+                throw new RuntimeException("Failing initialization");
+            }
         }
     }
 
-    // Same test as above, but for arrays of primitive objects
+    // Same test as above, but for arrays of value objects
     static void testArrayInitialization() {
-        // Testing anewarray when the primitive element class fails to initialize properly
+        // Testing anewarray when the value element class fails to initialize properly
         Throwable e = null;
         try {
-        BadTwo[] array = new BadTwo[10];
+            BadTwo[] array = (BadTwo[]) ValueClass.newNullRestrictedArray(BadTwo.class, 10);
         } catch(Throwable t) {
-        e = t;
+            e = t;
         }
         Asserts.assertNotNull(e, "Error should have been thrown");
         Asserts.assertTrue(e.getClass() == ExceptionInInitializerError.class, " Must be an ExceptionInInitializerError");
         // Second attempt because it doesn't fail the same way
         try {
-        BadTwo[] array = new BadTwo[10];
+            BadTwo[] array = (BadTwo[]) ValueClass.newNullRestrictedArray(BadTwo.class, 10);
         } catch(Throwable t) {
-        e = t;
+            e = t;
         }
         Asserts.assertNotNull(e, "Error should have been thrown");
         Asserts.assertTrue(e.getClass() == NoClassDefFoundError.class, "Must be a NoClassDefFoundError");
         Asserts.assertTrue(e.getCause().getClass() == ExceptionInInitializerError.class, "Must be an ExceptionInInitializerError");
-        // Testing multianewarray when the primitive element class fails to initialize properly
+        /*
+        Transition model (annotations and array factory) doesn't permit multi-dimentional arrays tests
+        Disabling those tests for now
+        Testing multianewarray when the value element class fails to initialize properly
         try {
-        BadThree[][] array = new BadThree[10][20];
+            BadThree[][] array = new BadThree[10][20];
         } catch(Throwable t) {
-        e = t;
+            e = t;
         }
         Asserts.assertNotNull(e, "Error should have been thrown");
         Asserts.assertTrue(e.getClass() == ExceptionInInitializerError.class, " Must be an ExceptionInInitializerError");
         // Second attempt because it doesn't fail the same way
         try {
-        BadThree[][][] array = new BadThree[10][30][10];
+            BadThree[][][] array = new BadThree[10][30][10];
         } catch(Throwable t) {
-        e = t;
+            e = t;
         }
         Asserts.assertNotNull(e, "Error should have been thrown");
         Asserts.assertTrue(e.getClass() == NoClassDefFoundError.class, "Must be a NoClassDefFoundError");
         Asserts.assertTrue(e.getCause().getClass() == ExceptionInInitializerError.class, "Must be an ExceptionInInitializerError");
+        */
     }
 
-    static primitive class BadFour {
+    @ImplicitlyConstructible
+    @LooselyConsistentValue
+    static value class BadFour {
         int i = 0;
         static BadFour[] array;
         static {
-        array = new BadFour[10];
-        if (ClassInitializationFailuresTest.failingInitialization) {
-            throw new RuntimeException("Failing initialization");
-        }
+            array = (BadFour[]) ValueClass.newNullRestrictedArray(BadFour.class, 10);
+            if (ClassInitializationFailuresTest.failingInitialization) {
+                throw new RuntimeException("Failing initialization");
+            }
         }
     }
 
-    // Even if a primitive class fails to initialize properly, some instances
+    // Even if a value class fails to initialize properly, some instances
     // of this class can escape and be accessible. The JVM must be able to
     // deal with those instances without crashes. The test below checks that
     // escaped values stored in an array are handled correctly
     static void testEscapedValueInArray() {
         Throwable e = null;
         try {
-        BadFour bt = new BadFour();
+            BadFour bt = new BadFour();
         } catch (Throwable t) {
-        e = t;
+            e = t;
         }
         Asserts.assertNotNull(e, "Error must have been thrown");
         Asserts.assertTrue(e.getClass() == ExceptionInInitializerError.class, " Must be an ExceptionInInitializerError");
         e = null;
         try {
-        BadFour t = BadFour.array[0];
+            BadFour t = BadFour.array[0];
         } catch(Throwable t) {
-        e = t;
+            e = t;
         }
         Asserts.assertNotNull(e, "Error should have been thrown");
         Asserts.assertTrue(e.getClass() == NoClassDefFoundError.class, "Must be a NoClassDefFoundError");
         Asserts.assertTrue(e.getCause().getClass() == ExceptionInInitializerError.class, "Must be an ExceptionInInitializerError");
     }
 
-    static primitive class BadFive {
+    @ImplicitlyConstructible
+    @LooselyConsistentValue
+    static value class BadFive {
         int i = 0;
         static {
-        ClassInitializationFailuresTest.bo = new BadSix();
-        if (ClassInitializationFailuresTest.failingInitialization) {
-            throw new RuntimeException("Failing initialization");
-        }
+            ClassInitializationFailuresTest.bo = new BadSix();
+            if (ClassInitializationFailuresTest.failingInitialization) {
+                throw new RuntimeException("Failing initialization");
+            }
         }
     }
 
@@ -190,9 +214,9 @@ public class ClassInitializationFailuresTest {
     static void testEscapedValueInObject() {
         Throwable e = null;
         try {
-        BadSix bt = new BadSix();
+            BadSix bt = new BadSix();
         } catch (Throwable t) {
-        e = t;
+            e = t;
         }
         Asserts.assertNotNull(e, "Error must have been thrown");
         Asserts.assertNotNull(ClassInitializationFailuresTest.bo, "bo object should have been set");

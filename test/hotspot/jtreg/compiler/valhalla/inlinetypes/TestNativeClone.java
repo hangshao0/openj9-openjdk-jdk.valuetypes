@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,9 +24,10 @@
 /**
  * @test
  * @bug 8209702
- * @summary Verify that the native clone intrinsic handles inline types.
+ * @summary Verify that the native clone intrinsic handles value objects.
  * @library /test/lib
  * @modules java.base/java.lang:+open
+ * @enablePreview
  * @run main/othervm -Xbatch -XX:-UseTypeProfile
  *                   -XX:CompileCommand=compileonly,compiler.valhalla.inlinetypes.MyValue::*
  *                   -XX:CompileCommand=compileonly,compiler.valhalla.inlinetypes.TestNativeClone::test*
@@ -42,13 +43,12 @@ import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import jdk.test.lib.Asserts;
 
-primitive class MyValue {
-    public final int x;
+value class MyValue {
+    public int x;
 
     public MyValue(int x) {
         this.x = x;
     }
-
 }
 
 public class TestNativeClone {

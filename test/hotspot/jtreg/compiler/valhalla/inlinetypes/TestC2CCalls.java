@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,10 +24,11 @@
 /**
  * @test
  * @key randomness
- * @summary Test inline type calling convention with compiled to compiled calls.
- * @library /test/lib /test/lib /compiler/whitebox /
- * @compile TestC2CCalls.java
- * @run driver jdk.test.lib.helpers.ClassFileInstaller sun.hotspot.WhiteBox
+ * @summary Test value class calling convention with compiled to compiled calls.
+ * @library /test/lib /compiler/whitebox /
+ * @enablePreview
+ * @build jdk.test.whitebox.WhiteBox
+ * @run driver jdk.test.lib.helpers.ClassFileInstaller jdk.test.whitebox.WhiteBox
  * @run main/othervm -Xbootclasspath/a:. -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI
  *                   TestC2CCalls
  * @run main/othervm -Xbootclasspath/a:. -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI
@@ -59,15 +60,15 @@ import java.util.Collections;
 import jdk.test.lib.Asserts;
 import jdk.test.lib.Utils;
 
-import sun.hotspot.WhiteBox;
+import jdk.test.whitebox.WhiteBox;
 
 public class TestC2CCalls {
     public static final WhiteBox WHITE_BOX = WhiteBox.getWhiteBox();
     public static final int COMP_LEVEL_FULL_OPTIMIZATION = 4; // C2 or JVMCI
     public static final int rI = Utils.getRandomInstance().nextInt() % 1000;
 
-    static primitive class OtherVal {
-        public final int x;
+    static value class OtherVal {
+        public int x;
 
         private OtherVal(int x) {
             this.x = x;
@@ -76,10 +77,10 @@ public class TestC2CCalls {
 
     static interface MyInterface1 {
         public MyInterface1 test1(OtherVal other, int y);
-        public MyInterface1 test2(OtherVal other1, OtherVal.ref other2, int y);
-        public MyInterface1 test3(OtherVal other1, OtherVal.ref other2, int y, boolean deopt);
-        public MyInterface1 test4(OtherVal other1, OtherVal.ref other2, int y);
-        public MyInterface1 test5(OtherVal other1, OtherVal.ref other2, int y);
+        public MyInterface1 test2(OtherVal other1, OtherVal other2, int y);
+        public MyInterface1 test3(OtherVal other1, OtherVal other2, int y, boolean deopt);
+        public MyInterface1 test4(OtherVal other1, OtherVal other2, int y);
+        public MyInterface1 test5(OtherVal other1, OtherVal other2, int y);
         public MyInterface1 test6();
         public MyInterface1 test7(int i1, int i2, int i3, int i4, int i5, int i6);
         public MyInterface1 test8(int i1, int i2, int i3, int i4, int i5, int i6, int i7);
@@ -89,8 +90,8 @@ public class TestC2CCalls {
         public int getValue();
     }
 
-    static primitive class MyValue1 implements MyInterface1 {
-        public final int x;
+    static value class MyValue1 implements MyInterface1 {
+        public int x;
 
         private MyValue1(int x) {
             this.x = x;
@@ -107,12 +108,12 @@ public class TestC2CCalls {
         }
 
         @Override
-        public MyValue1 test2(OtherVal other1, OtherVal.ref other2, int y) {
+        public MyValue1 test2(OtherVal other1, OtherVal other2, int y) {
             return new MyValue1(x + other1.x + other2.x + y);
         }
 
         @Override
-        public MyValue1 test3(OtherVal other1, OtherVal.ref other2, int y, boolean deopt) {
+        public MyValue1 test3(OtherVal other1, OtherVal other2, int y, boolean deopt) {
             if (!deopt) {
               return new MyValue1(x + other1.x + other2.x + y);
             } else {
@@ -122,12 +123,12 @@ public class TestC2CCalls {
         }
 
         @Override
-        public MyValue1 test4(OtherVal other1, OtherVal.ref other2, int y) {
+        public MyValue1 test4(OtherVal other1, OtherVal other2, int y) {
             return new MyValue1(x + other1.x + other2.x + y);
         }
 
         @Override
-        public MyValue1 test5(OtherVal other1, OtherVal.ref other2, int y) {
+        public MyValue1 test5(OtherVal other1, OtherVal other2, int y) {
             return new MyValue1(x + other1.x + other2.x + y);
         }
 
@@ -155,8 +156,8 @@ public class TestC2CCalls {
         }
     }
 
-    static primitive class MyValue2 implements MyInterface1 {
-        public final int x;
+    static value class MyValue2 implements MyInterface1 {
+        public int x;
 
         private MyValue2(int x) {
             this.x = x;
@@ -173,12 +174,12 @@ public class TestC2CCalls {
         }
 
         @Override
-        public MyValue2 test2(OtherVal other1, OtherVal.ref other2, int y) {
+        public MyValue2 test2(OtherVal other1, OtherVal other2, int y) {
             return new MyValue2(x + other1.x + other2.x + y);
         }
 
         @Override
-        public MyValue2 test3(OtherVal other1, OtherVal.ref other2, int y, boolean deopt) {
+        public MyValue2 test3(OtherVal other1, OtherVal other2, int y, boolean deopt) {
             if (!deopt) {
               return new MyValue2(x + other1.x + other2.x + y);
             } else {
@@ -188,12 +189,12 @@ public class TestC2CCalls {
         }
 
         @Override
-        public MyValue2 test4(OtherVal other1, OtherVal.ref other2, int y) {
+        public MyValue2 test4(OtherVal other1, OtherVal other2, int y) {
             return new MyValue2(x + other1.x + other2.x + y);
         }
 
         @Override
-        public MyValue2 test5(OtherVal other1, OtherVal.ref other2, int y) {
+        public MyValue2 test5(OtherVal other1, OtherVal other2, int y) {
             return new MyValue2(x + other1.x + other2.x + y);
         }
 
@@ -221,11 +222,11 @@ public class TestC2CCalls {
         }
     }
 
-    static primitive class MyValue3 implements MyInterface1 {
-        public final double d1;
-        public final double d2;
-        public final double d3;
-        public final double d4;
+    static value class MyValue3 implements MyInterface1 {
+        public double d1;
+        public double d2;
+        public double d3;
+        public double d4;
 
         private MyValue3(double d) {
             this.d1 = d;
@@ -240,17 +241,17 @@ public class TestC2CCalls {
         }
 
         @Override
-        public MyValue3 test1(OtherVal other, int y) { return MyValue3.default; }
+        public MyValue3 test1(OtherVal other, int y) { return new MyValue3(0); }
         @Override
-        public MyValue3 test2(OtherVal other1, OtherVal.ref other2, int y)  { return MyValue3.default; }
+        public MyValue3 test2(OtherVal other1, OtherVal other2, int y)  { return new MyValue3(0); }
         @Override
-        public MyValue3 test3(OtherVal other1, OtherVal.ref other2, int y, boolean deopt)  { return MyValue3.default; }
+        public MyValue3 test3(OtherVal other1, OtherVal other2, int y, boolean deopt)  { return new MyValue3(0); }
         @Override
-        public MyValue3 test4(OtherVal other1, OtherVal.ref other2, int y)  { return MyValue3.default; }
+        public MyValue3 test4(OtherVal other1, OtherVal other2, int y)  { return new MyValue3(0); }
         @Override
-        public MyValue3 test5(OtherVal other1, OtherVal.ref other2, int y)  { return MyValue3.default; }
+        public MyValue3 test5(OtherVal other1, OtherVal other2, int y)  { return new MyValue3(0); }
         @Override
-        public MyValue3 test6()  { return MyValue3.default; }
+        public MyValue3 test6()  { return new MyValue3(0); }
 
         @Override
         public MyValue3 test7(int i1, int i2, int i3, int i4, int i5, int i6)  {
@@ -271,11 +272,11 @@ public class TestC2CCalls {
         }
     }
 
-    static primitive class MyValue4 implements MyInterface1 {
-        public final int x1;
-        public final int x2;
-        public final int x3;
-        public final int x4;
+    static value class MyValue4 implements MyInterface1 {
+        public int x1;
+        public int x2;
+        public int x3;
+        public int x4;
 
         private MyValue4(int i) {
             this.x1 = i;
@@ -290,17 +291,17 @@ public class TestC2CCalls {
         }
 
         @Override
-        public MyValue4 test1(OtherVal other, int y) { return MyValue4.default; }
+        public MyValue4 test1(OtherVal other, int y) { return new MyValue4(0); }
         @Override
-        public MyValue4 test2(OtherVal other1, OtherVal.ref other2, int y)  { return MyValue4.default; }
+        public MyValue4 test2(OtherVal other1, OtherVal other2, int y)  { return new MyValue4(0); }
         @Override
-        public MyValue4 test3(OtherVal other1, OtherVal.ref other2, int y, boolean deopt)  { return MyValue4.default; }
+        public MyValue4 test3(OtherVal other1, OtherVal other2, int y, boolean deopt)  { return new MyValue4(0); }
         @Override
-        public MyValue4 test4(OtherVal other1, OtherVal.ref other2, int y)  { return MyValue4.default; }
+        public MyValue4 test4(OtherVal other1, OtherVal other2, int y)  { return new MyValue4(0); }
         @Override
-        public MyValue4 test5(OtherVal other1, OtherVal.ref other2, int y)  { return MyValue4.default; }
+        public MyValue4 test5(OtherVal other1, OtherVal other2, int y)  { return new MyValue4(0); }
         @Override
-        public MyValue4 test6()  { return MyValue4.default; }
+        public MyValue4 test6()  { return new MyValue4(0); }
 
         @Override
         public MyValue4 test7(int i1, int i2, int i3, int i4, int i5, int i6)  {
@@ -339,12 +340,12 @@ public class TestC2CCalls {
         }
 
         @Override
-        public MyObject test2(OtherVal other1, OtherVal.ref other2, int y) {
+        public MyObject test2(OtherVal other1, OtherVal other2, int y) {
             return new MyObject(x + other1.x + other2.x + y);
         }
 
         @Override
-        public MyObject test3(OtherVal other1, OtherVal.ref other2, int y, boolean deopt) {
+        public MyObject test3(OtherVal other1, OtherVal other2, int y, boolean deopt) {
             if (!deopt) {
               return new MyObject(x + other1.x + other2.x + y);
             } else {
@@ -354,12 +355,12 @@ public class TestC2CCalls {
         }
 
         @Override
-        public MyObject test4(OtherVal other1, OtherVal.ref other2, int y) {
+        public MyObject test4(OtherVal other1, OtherVal other2, int y) {
             return new MyObject(x + other1.x + other2.x + y);
         }
 
         @Override
-        public MyObject test5(OtherVal other1, OtherVal.ref other2, int y) {
+        public MyObject test5(OtherVal other1, OtherVal other2, int y) {
             return new MyObject(x + other1.x + other2.x + y);
         }
 
@@ -387,7 +388,7 @@ public class TestC2CCalls {
         }
     }
 
-    // Test calling methods with inline type arguments through an interface
+    // Test calling methods with value class arguments through an interface
     public static int test1(MyInterface1 intf, OtherVal other, int y) {
         return intf.test1(other, y).getValue();
     }
@@ -396,7 +397,7 @@ public class TestC2CCalls {
         return intf.test2(other, other, y).getValue();
     }
 
-    // Test mixing null-tolerant and null-free inline type arguments
+    // Test mixing null-tolerant and null-free value class arguments
     public static int test3(MyValue1 vt, OtherVal other, int y) {
         return vt.test2(other, other, y).getValue();
     }
@@ -405,7 +406,7 @@ public class TestC2CCalls {
         return obj.test2(other, other, y).getValue();
     }
 
-    // Optimized interface call with inline type receiver
+    // Optimized interface call with value class receiver
     public static int test5(MyInterface1 intf, OtherVal other, int y) {
         return intf.test1(other, y).getValue();
     }

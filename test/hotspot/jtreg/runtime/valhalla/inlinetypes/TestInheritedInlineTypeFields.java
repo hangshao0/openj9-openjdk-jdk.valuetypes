@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -23,17 +23,21 @@
 
 package runtime.valhalla.inlinetypes;
 
+import jdk.internal.vm.annotation.NullRestricted;
 import jdk.test.lib.Asserts;
 
 /*
  * @test TestInheritedInlineTypeFields
  * @summary Test if inline field klasses are correctly retrieved for inherited fields
  * @library /test/lib
- * @compile -XDallowWithFieldOperator -XDallowFlattenabilityModifiers Point.java TestInheritedInlineTypeFields.java
+ * @modules java.base/jdk.internal.vm.annotation
+ * @enablePreview
+ * @compile Point.java TestInheritedInlineTypeFields.java
  * @run main/othervm runtime.valhalla.inlinetypes.TestInheritedInlineTypeFields
  */
 
 class A {
+    @NullRestricted
     Point p;
 }
 
@@ -50,6 +54,7 @@ class D {
 }
 
 class E extends D {
+    @NullRestricted
     Point p1;
 }
 
@@ -58,6 +63,7 @@ class F extends E {
 }
 
 class G extends F {
+    @NullRestricted
     Point p2;
 }
 
@@ -73,7 +79,7 @@ public class TestInheritedInlineTypeFields {
         B b = new B();
         Asserts.assertEquals(b.p.x, 0);
         Asserts.assertEquals(b.p.y, 0);
-        b.p = Point.createPoint(1,2);
+        b.p = new Point(1,2);
         Asserts.assertEquals(b.p.x, 1);
         Asserts.assertEquals(b.p.y, 2);
 
@@ -82,8 +88,8 @@ public class TestInheritedInlineTypeFields {
         Asserts.assertEquals(g.p1.y, 0);
         Asserts.assertEquals(g.p2.x, 0);
         Asserts.assertEquals(g.p2.y, 0);
-        g.p1 = Point.createPoint(1,2);
-        g.p2 = Point.createPoint(3,4);
+        g.p1 = new Point(1,2);
+        g.p2 = new Point(3,4);
         Asserts.assertEquals(g.p1.x, 1);
         Asserts.assertEquals(g.p1.y, 2);
         Asserts.assertEquals(g.p2.x, 3);

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -57,7 +57,6 @@ public class Names {
 
     // keywords
     public final Name _class;
-    public final Name _default;
     public final Name _super;
     public final Name _this;
     public final Name var;
@@ -70,6 +69,8 @@ public class Names {
     public final Name transitive;
     public final Name uses;
     public final Name open;
+    public final Name underscore;
+    public final Name when;
     public final Name with;
     public final Name yield;
 
@@ -92,16 +93,16 @@ public class Names {
     public final Name hasNext;
     public final Name hashCode;
     public final Name init;
+    public final Name invoke;
     public final Name iterator;
     public final Name length;
-    public final Name newIdentity;
     public final Name next;
+    public final Name of;
     public final Name ordinal;
     public final Name provider;
     public final Name serialVersionUID;
     public final Name toString;
     public final Name value;
-    public final Name primitive;
     public final Name valueOf;
     public final Name values;
     public final Name readResolve;
@@ -114,9 +115,6 @@ public class Names {
     public final Name java_lang_Enum;
     public final Name java_lang_Object;
     public final Name java_lang_System;
-    public final Name __primitive__;
-    public final Name java_lang___primitive__;
-    public final Name java_lang_IdentityObject;
 
     // names of builtin classes
     public final Name Array;
@@ -126,9 +124,11 @@ public class Names {
     // package names
     public final Name java;
     public final Name java_lang;
+    public final Name jdk_internal_javac;
 
     // module names
     public final Name java_base;
+    public final Name java_se;
     public final Name jdk_unsupported;
 
     // attribute names
@@ -145,7 +145,6 @@ public class Names {
     public final Name Enum;
     public final Name Exceptions;
     public final Name InnerClasses;
-    public final Name JavaFlags;
     public final Name LineNumberTable;
     public final Name LocalVariableTable;
     public final Name LocalVariableTypeTable;
@@ -154,6 +153,7 @@ public class Names {
     public final Name ModuleResolution;
     public final Name NestHost;
     public final Name NestMembers;
+    public final Name LoadableDescriptors;
     public final Name Record;
     public final Name RuntimeInvisibleAnnotations;
     public final Name RuntimeInvisibleParameterAnnotations;
@@ -196,6 +196,7 @@ public class Names {
     public final Name module_info;
     public final Name package_info;
     public final Name requireNonNull;
+    public final Name main;
 
     // lambda-related
     public final Name lambda;
@@ -209,8 +210,6 @@ public class Names {
 
     // values
     public final Name dollarValue;
-    public final Name ref;
-    public final Name val;
 
 
     // record related
@@ -233,9 +232,11 @@ public class Names {
     // pattern switches
     public final Name typeSwitch;
     public final Name enumSwitch;
+    public final Name enumConstant;
 
     public final Name.Table table;
 
+    @SuppressWarnings("this-escape")
     public Names(Context context) {
         Options options = Options.instance(context);
         table = createTable(options);
@@ -250,7 +251,6 @@ public class Names {
 
         // keywords
         _class = fromString("class");
-        _default = fromString("default");
         _super = fromString("super");
         _this = fromString("this");
         var = fromString("var");
@@ -263,6 +263,8 @@ public class Names {
         transitive = fromString("transitive");
         uses = fromString("uses");
         open = fromString("open");
+        underscore = fromString("_");
+        when = fromString("when");
         with = fromString("with");
         yield = fromString("yield");
 
@@ -285,16 +287,16 @@ public class Names {
         hasNext = fromString("hasNext");
         hashCode = fromString("hashCode");
         init = fromString("<init>");
+        invoke = fromString("invoke");
         iterator = fromString("iterator");
         length = fromString("length");
         next = fromString("next");
-        newIdentity = fromString("newIdentity");
+        of = fromString("of");
         ordinal = fromString("ordinal");
         provider = fromString("provider");
         serialVersionUID = fromString("serialVersionUID");
         toString = fromString("toString");
         value = fromString("value");
-        primitive = fromString("primitive");
         valueOf = fromString("valueOf");
         values = fromString("values");
         readResolve = fromString("readResolve");
@@ -308,9 +310,6 @@ public class Names {
         java_lang_Enum = fromString("java.lang.Enum");
         java_lang_Object = fromString("java.lang.Object");
         java_lang_System = fromString("java.lang.System");
-        __primitive__ = fromString("__primitive__");
-        java_lang___primitive__ = fromString("java.lang.__primitive__");
-        java_lang_IdentityObject = fromString("java.lang.IdentityObject");
 
         // names of builtin classes
         Array = fromString("Array");
@@ -320,9 +319,11 @@ public class Names {
         // package names
         java = fromString("java");
         java_lang = fromString("java.lang");
+        jdk_internal_javac = fromString("jdk.internal.javac");
 
         // module names
         java_base = fromString("java.base");
+        java_se = fromString("java.se");
         jdk_unsupported = fromString("jdk.unsupported");
 
         // attribute names
@@ -340,7 +341,6 @@ public class Names {
         Exceptions = fromString("Exceptions");
         InnerClasses = fromString("InnerClasses");
         LineNumberTable = fromString("LineNumberTable");
-        JavaFlags = fromString("JavaFlags");
         LocalVariableTable = fromString("LocalVariableTable");
         LocalVariableTypeTable = fromString("LocalVariableTypeTable");
         MethodParameters = fromString("MethodParameters");
@@ -348,6 +348,7 @@ public class Names {
         ModuleResolution = fromString("ModuleResolution");
         NestHost = fromString("NestHost");
         NestMembers = fromString("NestMembers");
+        LoadableDescriptors = fromString("LoadableDescriptors");
         Record = fromString("Record");
         RuntimeInvisibleAnnotations = fromString("RuntimeInvisibleAnnotations");
         RuntimeInvisibleParameterAnnotations = fromString("RuntimeInvisibleParameterAnnotations");
@@ -390,6 +391,7 @@ public class Names {
         module_info = fromString("module-info");
         package_info = fromString("package-info");
         requireNonNull = fromString("requireNonNull");
+        main = fromString("main");
 
         //lambda-related
         lambda = fromString("lambda$");
@@ -400,10 +402,7 @@ public class Names {
         makeConcat = fromString("makeConcat");
         makeConcatWithConstants = fromString("makeConcatWithConstants");
 
-        // primitive classes
         dollarValue = fromString("$value");
-        ref = fromString("ref");
-        val = fromString("val");
 
         bootstrap = fromString("bootstrap");
         record = fromString("record");
@@ -418,17 +417,38 @@ public class Names {
         permits = fromString("permits");
         sealed = fromString("sealed");
 
+
         // pattern switches
         typeSwitch = fromString("typeSwitch");
         enumSwitch = fromString("enumSwitch");
+        enumConstant = fromString("enumConstant");
     }
 
     protected Name.Table createTable(Options options) {
         boolean useUnsharedTable = options.isSet("useUnsharedTable");
         if (useUnsharedTable)
-            return UnsharedNameTable.create(this);
-        else
-            return SharedNameTable.create(this);
+            return newUnsharedNameTable();
+        boolean useSharedTable = options.isSet("useSharedTable");
+        if (useSharedTable)
+            return newSharedNameTable();
+        boolean internStringTable = options.isSet("internStringTable");
+        return newStringNameTable(internStringTable);
+    }
+
+    public StringNameTable newStringNameTable(boolean intern) {
+        return StringNameTable.create(this, intern);
+    }
+
+    public SharedNameTable newSharedNameTable() {
+        return SharedNameTable.create(this);
+    }
+
+    public UnsharedNameTable newUnsharedNameTable() {
+        return UnsharedNameTable.create(this);
+    }
+
+    public boolean isInit(Name name) {
+        return name == init;
     }
 
     public void dispose() {
@@ -443,11 +463,19 @@ public class Names {
         return table.fromString(s);
     }
 
-    public Name fromUtf(byte[] cs) {
+    public Name fromUtf(byte[] cs) throws InvalidUtfException {
         return table.fromUtf(cs);
     }
 
-    public Name fromUtf(byte[] cs, int start, int len) {
-        return table.fromUtf(cs, start, len);
+    public Name fromUtf(byte[] cs, int start, int len, Convert.Validation validation) throws InvalidUtfException {
+        return table.fromUtf(cs, start, len, validation);
+    }
+
+    public Name fromUtfLax(byte[] cs, int start, int len) {
+        try {
+            return table.fromUtf(cs, start, len, Convert.Validation.NONE);
+        } catch (InvalidUtfException e) {
+            throw new AssertionError(e);
+        }
     }
 }

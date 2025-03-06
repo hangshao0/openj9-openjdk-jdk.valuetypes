@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -23,10 +23,19 @@
  * questions.
  */
 
+/*
+ * ===========================================================================
+ * (c) Copyright IBM Corp. 2023, 2024 All Rights Reserved
+ * ===========================================================================
+ */
+
 package java.lang.invoke;
 
+import java.lang.foreign.MemorySegment;
+import java.lang.foreign.SegmentAllocator;
+
 import jdk.internal.vm.annotation.ForceInline;
-import jdk.internal.invoke.NativeEntryPoint;
+import jdk.internal.foreign.abi.NativeEntryPoint;
 
 import static java.lang.invoke.LambdaForm.*;
 import static java.lang.invoke.MethodHandleNatives.Constants.LM_TRUSTED;
@@ -34,46 +43,61 @@ import static java.lang.invoke.MethodHandleNatives.Constants.REF_invokeStatic;
 import static java.lang.invoke.MethodHandleStatics.newInternalError;
 
 /**
- * This class models a method handle to a native function. A native method handle is made up of a {@link NativeEntryPoint},
+ * This class models a method handle to a native function. A native method handle is made up of a bound {@link MethodHandle},
  * which is used to capture the characteristics of the native call (such as calling convention to be used,
  * or whether a native transition is required) and a <em>fallback</em> method handle, which can be used
  * when intrinsification of this method handle is not possible.
  */
-/*non-public*/ class NativeMethodHandle extends MethodHandle {
-    final NativeEntryPoint nep;
-    final MethodHandle fallback;
+/*non-public*/ final class NativeMethodHandle extends MethodHandle {
+    /* The native entry point is literally the bound MethodHandle implemented in OpenJ9. */
+    final MethodHandle nep;
 
-    private NativeMethodHandle(MethodType type, LambdaForm form, MethodHandle fallback, NativeEntryPoint nep) {
+    /* The cache array for the bound MethodHandle stores MemberName and appendix which are populated
+     * by MethodHandleResolver.ffiCallLinkCallerMethod().
+     */
+    private Object[] invokeCache;
+
+    private NativeMethodHandle(MethodType type, LambdaForm form, MethodHandle nep) {
         super(type, form);
-        this.fallback = fallback;
         this.nep = nep;
     }
 
     /**
-     * Creates a new native method handle with given {@link NativeEntryPoint} and <em>fallback</em> method handle.
+     * Creates a new native method handle with given {@link MethodHandle} and <em>fallback</em> method handle.
      */
-    public static MethodHandle make(NativeEntryPoint nep, MethodHandle fallback) {
+    public static MethodHandle make(MethodHandle nep) {
         MethodType type = nep.type();
-        if (!allTypesPrimitive(type))
-            throw new IllegalArgumentException("Type must only contain primitives: " + type);
+        if (hasIllegalType(type))
+            throw new IllegalArgumentException("Illegal type(s) found: " + type);
 
-        if (type != fallback.type())
-            throw new IllegalArgumentException("Type of fallback must match: " + type + " != " + fallback.type());
 
         LambdaForm lform = preparedLambdaForm(type);
-        return new NativeMethodHandle(type, lform, fallback, nep);
+        return new NativeMethodHandle(type, lform, nep);
     }
 
-    private static boolean allTypesPrimitive(MethodType type) {
-        if (!type.returnType().isPrimitive())
-            return false;
+    private static boolean hasIllegalType(MethodType type) {
+        if (isIllegalType(type.returnType()))
+            return true;
 
-        for (Class<?> pType : type.parameterArray()) {
-            if (!pType.isPrimitive())
-                return false;
+        for (Class<?> pType : type.ptypes()) {
+            /* Specifically allow these parameter types for OpenJ9 for the moment. */
+            if (pType == MemorySegment.class || pType == SegmentAllocator.class) {
+                continue;
+            }
+            if (isIllegalType(pType))
+                return true;
         }
 
-        return true;
+        return false;
+    }
+
+    private static boolean isIllegalType(Class<?> pType) {
+        return !(pType == long.class
+              || pType == int.class
+              || pType == float.class
+              || pType == double.class
+              || pType == void.class
+              || pType == Object.class);
     }
 
     private static final MemberName.Factory IMPL_NAMES = MemberName.getFactory();
@@ -88,8 +112,12 @@ import static java.lang.invoke.MethodHandleStatics.newInternalError;
     }
 
     private static LambdaForm makePreparedLambdaForm(MethodType mtype) {
-        MethodType linkerType = mtype.insertParameterTypes(0, MethodHandle.class)
-                .appendParameterTypes(Object.class);
+        /* The NativeMethodHandle object must be appended to the end of the argument
+         * list to ensure the invoke cache of the bound MH is correctly fetched
+         * from linkToNative in the interpreter.
+         */
+        MethodType linkerType = mtype
+                .appendParameterTypes(Object.class); // the NativeMethodHandle object
         MemberName linker = new MemberName(MethodHandle.class, "linkToNative", linkerType, REF_invokeStatic);
         try {
             linker = IMPL_NAMES.resolveOrFail(REF_invokeStatic, linker, null, LM_TRUSTED, NoSuchMethodException.class);
@@ -100,20 +128,20 @@ import static java.lang.invoke.MethodHandleStatics.newInternalError;
         final int ARG_BASE = 1;
         final int ARG_LIMIT = ARG_BASE + mtype.parameterCount();
         int nameCursor = ARG_LIMIT;
-        final int GET_FALLBACK = nameCursor++;
         final int GET_NEP = nameCursor++;
         final int LINKER_CALL = nameCursor++;
-        LambdaForm.Name[] names = arguments(nameCursor - ARG_LIMIT, mtype.invokerType());
+
+        LambdaForm.Name[] names = invokeArguments(nameCursor - ARG_LIMIT, mtype);
         assert (names.length == nameCursor);
-        names[GET_FALLBACK] = new LambdaForm.Name(Lazy.NF_internalFallback, names[NMH_THIS]);
+
         names[GET_NEP] = new LambdaForm.Name(Lazy.NF_internalNativeEntryPoint, names[NMH_THIS]);
+
         Object[] outArgs = new Object[linkerType.parameterCount()];
-        // Need to pass fallback here so we can call it without destroying the receiver register!!
-        outArgs[0] = names[GET_FALLBACK];
-        System.arraycopy(names, ARG_BASE, outArgs, 1, mtype.parameterCount());
+        System.arraycopy(names, ARG_BASE, outArgs, 0, mtype.parameterCount());
         outArgs[outArgs.length - 1] = names[GET_NEP];
         names[LINKER_CALL] = new LambdaForm.Name(linker, outArgs);
-        LambdaForm lform = new LambdaForm(ARG_LIMIT, names, LAST_RESULT);
+
+        LambdaForm lform = LambdaForm.create(ARG_LIMIT, names, LAST_RESULT);
         // This is a tricky bit of code.  Don't send it through the LF interpreter.
         lform.compileToBytecode();
         return lform;
@@ -123,7 +151,7 @@ import static java.lang.invoke.MethodHandleStatics.newInternalError;
     @Override
     MethodHandle copyWith(MethodType mt, LambdaForm lf) {
         assert (this.getClass() == NativeMethodHandle.class);  // must override in subclasses
-        return new NativeMethodHandle(mt, lf, fallback, nep);
+        return new NativeMethodHandle(mt, lf, nep);
     }
 
     @Override
@@ -132,13 +160,11 @@ import static java.lang.invoke.MethodHandleStatics.newInternalError;
     }
 
     @ForceInline
-    static Object internalNativeEntryPoint(Object mh) {
-        return ((NativeMethodHandle)mh).nep;
-    }
-
-    @ForceInline
-    static MethodHandle internalFallback(Object mh) {
-        return ((NativeMethodHandle)mh).fallback;
+    static Object internalNativeEntryPoint(Object nativeMH) {
+        /* Return the nativeMH object as the argument passed over
+         * to linkToNative in the LambdaForm-generated bytecode.
+         */
+        return nativeMH;
     }
 
     /**
@@ -149,8 +175,6 @@ import static java.lang.invoke.MethodHandleStatics.newInternalError;
 
         static final NamedFunction
                 NF_internalNativeEntryPoint;
-        static final NamedFunction
-                NF_internalFallback;
 
         static {
             try {
@@ -158,8 +182,6 @@ import static java.lang.invoke.MethodHandleStatics.newInternalError;
                 NamedFunction[] nfs = new NamedFunction[]{
                         NF_internalNativeEntryPoint = new NamedFunction(
                                 THIS_CLASS.getDeclaredMethod("internalNativeEntryPoint", Object.class)),
-                        NF_internalFallback = new NamedFunction(
-                                THIS_CLASS.getDeclaredMethod("internalFallback", Object.class))
                 };
                 for (NamedFunction nf : nfs) {
                     // Each nf must be statically invocable or we get tied up in our bootstraps.

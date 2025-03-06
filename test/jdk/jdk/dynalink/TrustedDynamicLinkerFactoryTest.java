@@ -1,12 +1,10 @@
 /*
- * Copyright (c) 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.  Oracle designates this
- * particular file as subject to the "Classpath" exception as provided
- * by Oracle in the LICENSE file that accompanied this code.
+ * published by the Free Software Foundation.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -47,7 +45,7 @@ import org.testng.annotations.Test;
 /**
  * @test
  * @build TestGuardingDynamicLinkerExporter
- * @run testng/othervm/java.security.policy=trusted.security.policy TrustedDynamicLinkerFactoryTest
+ * @run testng/othervm TrustedDynamicLinkerFactoryTest
  */
 public class TrustedDynamicLinkerFactoryTest {
 
@@ -177,8 +175,6 @@ public class TrustedDynamicLinkerFactoryTest {
         Assert.assertEquals(linkerReachCounter[0], 2);
     }
 
-    private static class TestObject {}
-
     @Test
     public void prelinkTransformerTest() throws Throwable {
         final DynamicLinkerFactory factory = newDynamicLinkerFactory(true);
@@ -195,7 +191,7 @@ public class TrustedDynamicLinkerFactoryTest {
         final CallSite cs = linker.link(new SimpleRelinkableCallSite(new CallSiteDescriptor(
                 MethodHandles.publicLookup(), GET_PROPERTY, mt)));
         Assert.assertFalse(reachedPrelinkTransformer[0]);
-        Assert.assertEquals(cs.getTarget().invoke(new TestObject(), "class"), TestObject.class);
+        Assert.assertEquals(cs.getTarget().invoke(new Object(), "class"), Object.class);
         Assert.assertTrue(reachedPrelinkTransformer[0]);
     }
 
@@ -214,13 +210,13 @@ public class TrustedDynamicLinkerFactoryTest {
         final CallSite cs = linker.link(new SimpleRelinkableCallSite(new CallSiteDescriptor(
                 MethodHandles.publicLookup(), GET_PROPERTY, mt)));
         Assert.assertFalse(reachedInternalObjectsFilter[0]);
-        Assert.assertEquals(cs.getTarget().invoke(new TestObject(), "class"), TestObject.class);
+        Assert.assertEquals(cs.getTarget().invoke(new Object(), "class"), Object.class);
         Assert.assertTrue(reachedInternalObjectsFilter[0]);
     }
 
     @Test
     public void autoLoadedLinkerTest() {
-        testAutoLoadedLinkerInvoked(new TestObject(), "toString");
+        testAutoLoadedLinkerInvoked(new Object(), "toString");
     }
 
     @Test

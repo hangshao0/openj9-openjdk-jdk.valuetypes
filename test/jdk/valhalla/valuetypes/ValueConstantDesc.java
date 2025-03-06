@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,35 +24,39 @@
 
 /*
  * @test
- * @summary Test ConstantDesc for primitive classes
- * @compile --enable-preview --source ${jdk.version} Point.java ValueConstantDesc.java
- * @run testng/othervm --enable-preview ValueConstantDesc
+ * @summary Test ConstantDesc for value classes
+ * @enablePreview
+ * @run junit/othervm ValueConstantDesc
  */
-
-import org.testng.annotations.DataProvider;
-import org.testng.annotations.Test;
 
 import java.lang.constant.ClassDesc;
 import java.lang.invoke.MethodHandles;
+import java.util.stream.Stream;
 
-import static org.testng.Assert.*;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
+import static org.junit.jupiter.api.Assertions.*;
 
 public class ValueConstantDesc {
-    private static final String NAME = "Point";
+    static value class V { }
 
-    @DataProvider(name="descs")
-    static Object[][] descs() {
-        return new Object[][]{
-            new Object[] { Point.class.asValueType(),     ClassDesc.ofDescriptor("Q" + NAME + ";"), NAME},
-            new Object[] { Point.ref.class, ClassDesc.ofDescriptor("L" + NAME + ";"), NAME},
-            new Object[] { Point[].class,   ClassDesc.ofDescriptor("[Q" + NAME + ";"), NAME + "[]"},
-            new Object[] { Point.ref[][].class, ClassDesc.ofDescriptor("[[L" + NAME + ";"), NAME + "[][]"},
-        };
+    private static final MethodHandles.Lookup LOOKUP = MethodHandles.lookup();
+
+    static Stream<Arguments> testCases() {
+        return Stream.of(
+                Arguments.of(V.class, "LValueConstantDesc$V;", "ValueConstantDesc$V"),
+                Arguments.of(V[].class, "[LValueConstantDesc$V;", "ValueConstantDesc$V[]"),
+                Arguments.of(V[][].class, "[[LValueConstantDesc$V;", "ValueConstantDesc$V[][]")
+        );
     }
 
-    @Test(dataProvider="descs")
-    public void classDesc(Class<?> type, ClassDesc expected, String displayName) {
+    @ParameterizedTest
+    @MethodSource("testCases")
+    public void classDesc(Class<?> type, String descriptor, String displayName) throws ReflectiveOperationException {
         ClassDesc cd = type.describeConstable().orElseThrow();
+        ClassDesc desc = ClassDesc.ofDescriptor(descriptor);
+
         if (type.isArray()) {
             assertTrue(cd.isArray());
             assertFalse(cd.isClassOrInterface());
@@ -60,56 +64,11 @@ public class ValueConstantDesc {
             assertFalse(cd.isArray());
             assertTrue(cd.isClassOrInterface());
         }
-        assertEquals(cd, expected);
+        assertEquals(cd, desc);
         assertEquals(cd.displayName(), displayName);
         assertEquals(cd.descriptorString(), type.descriptorString());
-    }
 
-    @DataProvider(name="componentTypes")
-    static Object[][] componentTypes() {
-        return new Object[][]{
-            new Object[] { Point.class.asValueType() },
-            new Object[] { Point.ref.class }
-        };
-    }
-
-    @Test(dataProvider="componentTypes")
-    public void arrayType(Class<?> componentType) {
-        ClassDesc cd = componentType.describeConstable().orElseThrow();
-        ClassDesc arrayDesc = cd.arrayType();
-        ClassDesc arrayDesc2 = cd.arrayType(2);
-
-        assertTrue(arrayDesc.isArray());
-        assertEquals(arrayDesc.componentType(), cd);
-        assertTrue(arrayDesc2.isArray());
-        assertEquals(arrayDesc2.componentType(), arrayDesc);
-    }
-
-    @DataProvider(name="valueDesc")
-    static Object[][] valueDesc() {
-        return new Object[][]{
-                new Object[] { Point.class.asValueType(),         "Q" + NAME + ";"},
-                new Object[] { Point.ref.class,     "L" + NAME + ";"},
-                new Object[] { Point[].class,       "[Q" + NAME + ";"},
-                new Object[] { Point.ref[][].class, "[[L" + NAME + ";"},
-        };
-    }
-    @Test(dataProvider="valueDesc")
-    public void asValueType(Class<?> type, String descriptor) throws ReflectiveOperationException {
-        ClassDesc cd = type.describeConstable().orElseThrow();
-        ClassDesc valueDesc = ClassDesc.ofDescriptor(descriptor);
-        assertEquals(cd, valueDesc);
-        MethodHandles.Lookup lookup = MethodHandles.lookup();
-        Class<?> c = (Class<?>) cd.resolveConstantDesc(lookup);
+        Class<?> c = cd.resolveConstantDesc(LOOKUP);
         assertTrue(c == type);
-        assertTrue(cd.isValueType() == type.isValueType());
-    }
-
-    @Test(expectedExceptions = {LinkageError.class})
-    public void illegalDescriptor() throws ReflectiveOperationException {
-        // ValueConstantDesc is not a primitive class
-        ClassDesc cd = ClassDesc.ofDescriptor("QValueConstantDesc;");
-        MethodHandles.Lookup lookup = MethodHandles.lookup();
-        Class<?> c = (Class<?>) cd.resolveConstantDesc(lookup);
     }
 }

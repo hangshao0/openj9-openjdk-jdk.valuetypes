@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -27,10 +27,13 @@
  * @summary Hello World test for dynamic archive
  * @requires vm.cds
  * @library /test/lib /test/hotspot/jtreg/runtime/cds/appcds /test/hotspot/jtreg/runtime/cds/appcds/test-classes
- * @build HelloInlineClassApp
- * @build sun.hotspot.WhiteBox
- * @run driver jdk.test.lib.helpers.ClassFileInstaller -jar hello_inline.jar HelloInlineClassApp HelloInlineClassApp$Point HelloInlineClassApp$Rectangle
- * @run driver jdk.test.lib.helpers.ClassFileInstaller sun.hotspot.WhiteBox sun.hotspot.WhiteBox$WhiteBoxPermission
+ * @enablePreview
+ * @modules java.base/jdk.internal.value
+ *          java.base/jdk.internal.vm.annotation
+ * @compile ../test-classes/HelloInlineClassApp.java
+ * @build jdk.test.whitebox.WhiteBox
+ * @run driver jdk.test.lib.helpers.ClassFileInstaller -jar hello_inline.jar HelloInlineClassApp HelloInlineClassApp$Point HelloInlineClassApp$Rectangle HelloInlineClassApp$ValueRecord
+ * @run driver jdk.test.lib.helpers.ClassFileInstaller jdk.test.whitebox.WhiteBox
  * @run main/othervm -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI -Xbootclasspath/a:. HelloDynamicInlineClass
  */
 
@@ -38,21 +41,13 @@ import jdk.test.lib.helpers.ClassFileInstaller;
 
 public class HelloDynamicInlineClass extends DynamicArchiveTestBase {
     public static void main(String[] args) throws Exception {
-        runTest(HelloDynamicInlineClass::testDefaultBase);
-        runTest(HelloDynamicInlineClass::testCustomBase);
+        runTest(HelloDynamicInlineClass::test);
     }
 
-    // (1) Test with default base archive + top archive
-    static void testDefaultBase() throws Exception {
+    static void test() throws Exception {
         String topArchiveName = getNewArchiveName("top");
-        doTest(null, topArchiveName);
-    }
-
-    // (2) Test with custom base archive + top archive
-    static void testCustomBase() throws Exception {
-        String topArchiveName = getNewArchiveName("top2");
         String baseArchiveName = getNewArchiveName("base");
-        TestCommon.dumpBaseArchive(baseArchiveName);
+        TestCommon.dumpBaseArchive(baseArchiveName, "--enable-preview", "-Xlog:cds");
         doTest(baseArchiveName, topArchiveName);
     }
 
@@ -60,6 +55,7 @@ public class HelloDynamicInlineClass extends DynamicArchiveTestBase {
         String appJar = ClassFileInstaller.getJarPath("hello_inline.jar");
         String mainClass = "HelloInlineClassApp";
         dump2(baseArchiveName, topArchiveName,
+             "--enable-preview",
              "-Xlog:cds",
              "-Xlog:cds+dynamic=debug",
              "-cp", appJar, mainClass)
@@ -67,6 +63,7 @@ public class HelloDynamicInlineClass extends DynamicArchiveTestBase {
                     output.shouldContain("Written dynamic archive 0x");
                 });
         run2(baseArchiveName, topArchiveName,
+            "--enable-preview",
             "-Xlog:class+load",
             "-Xlog:cds+dynamic=debug,cds=debug",
             "-cp", appJar, mainClass)

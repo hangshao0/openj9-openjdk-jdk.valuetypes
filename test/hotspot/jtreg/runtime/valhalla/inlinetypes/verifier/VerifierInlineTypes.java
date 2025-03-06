@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -22,10 +22,12 @@
  *
  */
 /*
+ * @ignore Fix JDK-8328423
  * @test
  * @bug 8223028
  * @summary test that the right exceptions get thrown for bad inline type
  *          class files.
+ * @enablePreview
  * @compile verifierTests.jcod
  * @run main/othervm -verify VerifierInlineTypes
  */
@@ -63,14 +65,14 @@ public class VerifierInlineTypes {
 
     public static void main(String[] args) throws Exception {
 
-        // Test that a defaultvalue opcode with an out of bounds cp index causes a VerifyError.
+        // Test that a aconst_init opcode with an out of bounds cp index causes a VerifyError.
         runTestVerifyError("defValBadCP", "Illegal constant pool index");
 
         // Test that ClassFormatError is thrown for a class file, with major version 54, that
-        // contains a defaultvalue opcode.
-        runTestFormatError("defValBadMajorVersion", "defaultvalue not supported by this class file version");
+        // contains a aconst_init opcode.
+        runTestFormatError("defValBadMajorVersion", "aconst_init not supported by this class file version");
 
-        // Test VerifyError is thrown if a defaultvalue's cp entry is not a class.
+        // Test VerifyError is thrown if a aconst_init's cp entry is not a class.
         runTestVerifyError("defValWrongCPType", "Illegal type at constant pool entry");
 
         // Test that a withfield opcode with an out of bounds cp index causes a VerifyError.
@@ -90,7 +92,7 @@ public class VerifierInlineTypes {
         // Test VerifyError is thrown if a withfields's cp entry is not a field.
         runTestVerifyError("wthFldWrongCPType", "Illegal type at constant pool entry");
 
-        // Test VerifyError is thrown if a defaultvalue's cp entry is not an inline type.
+        // Test VerifyError is thrown if a aconst_init's cp entry is not an inline type.
         runTestVerifyError("defValueObj", "Illegal type at constant pool entry 4");
 
         // Test that the verifier doesn't require that a withfield bytecode has a Q type operand.

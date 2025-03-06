@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -23,11 +23,21 @@
  * questions.
  */
 
+/*
+ * ===========================================================================
+ * (c) Copyright IBM Corp. 2022, 2023 All Rights Reserved
+ * ===========================================================================
+ */
+
 package java.util;
 import java.util.Date;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.lang.ref.Cleaner.Cleanable;
 import jdk.internal.ref.CleanerFactory;
+
+/*[IF CRIU_SUPPORT]*/
+import openj9.internal.criu.InternalCRIUSupport;
+/*[ENDIF] CRIU_SUPPORT*/
 
 /**
  * A facility for threads to schedule tasks for future execution in a
@@ -63,7 +73,7 @@ import jdk.internal.ref.CleanerFactory;
  * <p>This class does <i>not</i> offer real-time guarantees: it schedules
  * tasks using the {@code Object.wait(long)} method.
  *
- * <p>Java 5.0 introduced the {@code java.util.concurrent} package and
+ * @apiNote Java 5.0 introduced the {@code java.util.concurrent} package and
  * one of the concurrency utilities therein is the {@link
  * java.util.concurrent.ScheduledThreadPoolExecutor
  * ScheduledThreadPoolExecutor} which is a thread pool for repeatedly
@@ -74,13 +84,11 @@ import jdk.internal.ref.CleanerFactory;
  * implement {@code Runnable}).  Configuring {@code
  * ScheduledThreadPoolExecutor} with one thread makes it equivalent to
  * {@code Timer}.
- *
- * <p>Implementation note: This class scales to large numbers of concurrently
+ * @implNote This class scales to large numbers of concurrently
  * scheduled tasks (thousands should present no problem).  Internally,
  * it uses a binary heap to represent its task queue, so the cost to schedule
  * a task is O(log n), where n is the number of concurrently scheduled tasks.
- *
- * <p>Implementation note: All constructors start a timer thread.
+ * <p> All constructors start a timer thread.
  *
  * @author  Josh Bloch
  * @see     TimerTask
@@ -180,6 +188,7 @@ public class Timer {
      * @throws NullPointerException if {@code name} is null
      * @since 1.5
      */
+    @SuppressWarnings("this-escape")
     public Timer(String name, boolean isDaemon) {
         var threadReaper = new ThreadReaper(queue, thread);
         this.cleanup = CleanerFactory.cleaner().register(this, threadReaper);
@@ -202,6 +211,14 @@ public class Timer {
     public void schedule(TimerTask task, long delay) {
         if (delay < 0)
             throw new IllegalArgumentException("Negative delay.");
+        /*[IF CRIU_SUPPORT]*/
+        // only tasks scheduled before Checkpoint to be adjusted
+        if ((InternalCRIUSupport.getCheckpointRestoreNanoTimeDelta() == 0)
+            && (task != null)
+        ) {
+            task.criuAdjustRequired = true;
+        }
+        /*[ENDIF] CRIU_SUPPORT*/
         sched(task, System.currentTimeMillis()+delay, 0);
     }
 
@@ -257,6 +274,14 @@ public class Timer {
             throw new IllegalArgumentException("Negative delay.");
         if (period <= 0)
             throw new IllegalArgumentException("Non-positive period.");
+        /*[IF CRIU_SUPPORT]*/
+        // only tasks scheduled before Checkpoint to be adjusted
+        if ((InternalCRIUSupport.getCheckpointRestoreNanoTimeDelta() == 0)
+            && (task != null)
+        ) {
+            task.criuAdjustRequired = true;
+        }
+        /*[ENDIF] CRIU_SUPPORT*/
         sched(task, System.currentTimeMillis()+delay, -period);
     }
 
@@ -337,6 +362,14 @@ public class Timer {
             throw new IllegalArgumentException("Negative delay.");
         if (period <= 0)
             throw new IllegalArgumentException("Non-positive period.");
+        /*[IF CRIU_SUPPORT]*/
+        // only tasks scheduled before Checkpoint to be adjusted
+        if ((InternalCRIUSupport.getCheckpointRestoreNanoTimeDelta() == 0)
+            && (task != null)
+        ) {
+            task.criuAdjustRequired = true;
+        }
+        /*[ENDIF] CRIU_SUPPORT*/
         sched(task, System.currentTimeMillis()+delay, period);
     }
 
@@ -424,8 +457,12 @@ public class Timer {
     }
 
     /**
-     * Terminates this timer, discarding any currently scheduled tasks.
-     * Does not interfere with a currently executing task (if it exists).
+     * Terminates this timer, <i>discarding</i> any currently scheduled tasks.
+     * It should be noted that this method does not <i>cancel</i> the scheduled
+     * tasks. For a task to be considered cancelled, the task itself should
+     * invoke {@link TimerTask#cancel()}.
+     *
+     * <p>This method does not interfere with a currently executing task (if it exists).
      * Once a timer has been terminated, its execution thread terminates
      * gracefully, and no more tasks may be scheduled on it.
      *
@@ -436,6 +473,7 @@ public class Timer {
      *
      * <p>This method may be called repeatedly; the second and subsequent
      * calls have no effect.
+     * @see TimerTask#cancel()
      */
     public void cancel() {
         synchronized(queue) {
@@ -445,23 +483,25 @@ public class Timer {
     }
 
     /**
-     * Removes all cancelled tasks from this timer's task queue.  <i>Calling
-     * this method has no effect on the behavior of the timer</i>, but
-     * eliminates the references to the cancelled tasks from the queue.
+     * Removes all <i>cancelled</i> tasks from this timer's task queue.
+     * <i>Calling this method has no effect on the behavior of the timer</i>,
+     * but eliminates the references to the cancelled tasks from the queue.
      * If there are no external references to these tasks, they become
      * eligible for garbage collection.
      *
      * <p>Most programs will have no need to call this method.
      * It is designed for use by the rare application that cancels a large
      * number of tasks.  Calling this method trades time for space: the
-     * runtime of the method may be proportional to n + c log n, where n
-     * is the number of tasks in the queue and c is the number of cancelled
-     * tasks.
+     * runtime of the method may be proportional to {@code n + c log n}, where
+     * {@code n} is the number of tasks in the queue and {@code c} is the number
+     * of cancelled tasks.
      *
      * <p>Note that it is permissible to call this method from within
      * a task scheduled on this timer.
      *
      * @return the number of tasks removed from the queue.
+     * @see #cancel()
+     * @see TimerTask#cancel()
      * @since 1.5
      */
      public int purge() {
@@ -508,6 +548,7 @@ class TimerThread extends Thread {
     private TaskQueue queue;
 
     TimerThread(TaskQueue queue) {
+        super("java.util.TimerThread");
         this.queue = queue;
     }
 
@@ -547,6 +588,20 @@ class TimerThread extends Thread {
                             continue;  // No action required, poll queue again
                         }
                         currentTime = System.currentTimeMillis();
+                        /*[IF CRIU_SUPPORT]*/
+                        if (task.criuAdjustRequired) {
+                            long checkpointRestoreTimeDelta = InternalCRIUSupport.getCheckpointRestoreNanoTimeDelta();
+                            // A zero checkpointRestoreTimeDelta value indicates no Checkpoint performed yet,
+                            // it can't be negative, otherwise a RestoreException already was thrown.
+                            if (checkpointRestoreTimeDelta > 0) {
+                                // Ensure the time compensation in milliseconds is not less than the checkpoint restore time delta.
+                                task.nextExecutionTime += (checkpointRestoreTimeDelta / 1000000);
+                                task.nextExecutionTime += ((checkpointRestoreTimeDelta % 1000000 == 0) ? 0 : 1);
+                                // clear the flag - only one time adjustment required
+                                task.criuAdjustRequired = false;
+                            }
+                        }
+                        /*[ENDIF] CRIU_SUPPORT*/
                         executionTime = task.nextExecutionTime;
                         if (taskFired = (executionTime<=currentTime)) {
                             if (task.period == 0) { // Non-repeating, remove

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -30,10 +30,13 @@
  * @comment JDK-8231610 Relocate the CDS archive if it cannot be mapped to the requested address
  * @bug 8231610
  * @library /test/lib /test/hotspot/jtreg/runtime/cds/appcds /test/hotspot/jtreg/runtime/cds/appcds/test-classes
- * @build HelloRelocation
- * @build sun.hotspot.WhiteBox
- * @run driver jdk.test.lib.helpers.ClassFileInstaller -jar hello.jar HelloRelocation HelloInlineClassApp HelloInlineClassApp$Point HelloInlineClassApp$Rectangle
- * @run driver jdk.test.lib.helpers.ClassFileInstaller sun.hotspot.WhiteBox
+ * @enablePreview
+ * @modules java.base/jdk.internal.value
+ *          java.base/jdk.internal.vm.annotation
+ * @compile ../test-classes/HelloInlineClassApp.java ../test-classes/HelloRelocation.java
+ * @build jdk.test.whitebox.WhiteBox
+ * @run driver jdk.test.lib.helpers.ClassFileInstaller -jar hello.jar HelloRelocation HelloInlineClassApp HelloInlineClassApp$Point HelloInlineClassApp$Rectangle  HelloInlineClassApp$ValueRecord
+ * @run driver jdk.test.lib.helpers.ClassFileInstaller jdk.test.whitebox.WhiteBox
  * @run main/othervm -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI -Xbootclasspath/a:. DynamicArchiveRelocationTest
  */
 
@@ -92,12 +95,13 @@ public class DynamicArchiveRelocationTest extends DynamicArchiveTestBase {
 
         // (1) Dump base archive (static)
 
-        TestCommon.dumpBaseArchive(baseArchiveName, unlockArg, logArg)
+        TestCommon.dumpBaseArchive(baseArchiveName, "--enable-preview", unlockArg, logArg)
           .shouldContain("Relocating archive from");
 
         // (2) Dump top archive (dynamic)
 
         dump2(baseArchiveName, topArchiveName,
+              "--enable-preview",
               unlockArg,
               dumpTopRelocArg,
               logArg,
@@ -109,6 +113,7 @@ public class DynamicArchiveRelocationTest extends DynamicArchiveTestBase {
                 });
 
         run2(baseArchiveName, topArchiveName,
+             "--enable-preview",
              unlockArg,
              runRelocArg,
              logArg,

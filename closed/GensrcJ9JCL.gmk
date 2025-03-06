@@ -1,5 +1,5 @@
 # ===========================================================================
-# (c) Copyright IBM Corp. 2020, 2021 All Rights Reserved
+# (c) Copyright IBM Corp. 2020, 2025 All Rights Reserved
 # ===========================================================================
 # This code is free software; you can redistribute it and/or modify it
 # under the terms of the GNU General Public License version 2 only, as
@@ -24,69 +24,81 @@ all :
 
 include $(SPEC)
 include $(TOPDIR)/make/common/MakeBase.gmk
-
-J9TOOLS_DIR := $(SUPPORT_OUTPUTDIR)/j9tools
-JPP_JAR     := $(J9TOOLS_DIR)/jpp.jar
+include $(TOPDIR)/make/common/CopyFiles.gmk
+include $(TOPDIR)/closed/JPP.gmk
 
 RecursiveWildcard = $(foreach dir,$(wildcard $1/*),$(call RecursiveWildcard,$(dir),$2) $(filter $(subst *,%,$2),$(dir)))
-AllJclSource = $(call RecursiveWildcard,$(OPENJ9_TOPDIR)/jcl/src,*.java)
+JppSourceDirs := $(OPENJ9_TOPDIR)/jcl/src
+JppSourceDirs += $(TOPDIR)/closed/src
 
 ifeq (true,$(OPENJ9_ENABLE_DDR))
-  AllDdrSource = $(call RecursiveWildcard,$(OPENJ9_TOPDIR)/debugtools/DDR_VM/src,*.java)
-else
-  AllDdrSource =
+  JppSourceDirs += $(OPENJ9_TOPDIR)/debugtools/DDR_VM/src
 endif # OPENJ9_ENABLE_DDR
 
-JPP_TAGS := PLATFORM-$(OPENJ9_PLATFORM_CODE)
+# OpenJ9 CRIU only supports Linux, so we only need to consider the share and unix sub-directories.
+$(eval $(call SetupCopyFiles,COPY_OVERLAY_FILES, \
+	SRC := $(TOPDIR), \
+	DEST := $(SUPPORT_OUTPUTDIR)/overlay, \
+	FILES := \
+		src/java.base/share/classes/com/sun/crypto/provider/HmacCore.java \
+		src/java.base/share/classes/java/io/PrintStream.java \
+		src/java.base/share/classes/java/lang/ClassValue.java \
+		src/java.base/share/classes/java/lang/invoke/ClassSpecializer.java \
+		src/java.base/share/classes/java/net/InetAddress.java \
+		src/java.base/share/classes/java/security/Security.java \
+		src/java.base/share/classes/java/util/Timer.java \
+		src/java.base/share/classes/java/util/TimerTask.java \
+		src/java.base/share/classes/java/util/concurrent/ConcurrentHashMap.java \
+		src/java.base/share/classes/java/util/zip/ZipFile.java \
+		src/java.base/share/classes/jdk/internal/access/JavaNetInetAddressAccess.java \
+		src/java.base/share/classes/jdk/internal/ref/PhantomCleanable.java \
+		src/java.base/share/classes/module-info.java \
+		src/java.base/share/classes/sun/security/jca/ProviderConfig.java \
+		src/java.base/share/classes/sun/security/jca/ProviderList.java \
+		src/java.base/share/classes/sun/security/provider/DigestBase.java \
+		src/java.base/share/classes/sun/security/provider/SecureRandom.java \
+		src/java.base/unix/classes/java/lang/ProcessEnvironment.java \
+		src/java.base/unix/classes/sun/security/provider/NativePRNG.java \
+		src/java.se/share/data/jdwp/jdwp.spec \
+		src/jdk.jdi/share/classes/com/sun/tools/example/debug/tty/EventHandler.java \
+		src/jdk.jdi/share/classes/com/sun/tools/example/debug/tty/EventNotifier.java \
+		src/jdk.jdi/share/classes/com/sun/tools/example/debug/tty/TTY.java \
+		src/jdk.jdi/share/classes/com/sun/tools/example/debug/tty/TTYResources.java \
+		src/jdk.jdi/share/classes/com/sun/tools/example/debug/tty/TTYResources_de.java \
+		src/jdk.jdi/share/classes/com/sun/tools/example/debug/tty/TTYResources_ja.java \
+		src/jdk.jdi/share/classes/com/sun/tools/example/debug/tty/TTYResources_zh_CN.java \
+		src/jdk.jdi/share/classes/com/sun/tools/jdi/EventSetImpl.java \
+	))
 
-ifeq (true,$(OPENJ9_ENABLE_CRIU_SUPPORT))
-  JPP_TAGS += CRIU_SUPPORT
-endif # OPENJ9_ENABLE_CRIU_SUPPORT
+IncludeIfUnsure := -includeIfUnsure -noWarnIncludeIf
 
-ifeq (true,$(OPENJ9_ENABLE_INLINE_TYPES))
-  JPP_TAGS += INLINE-TYPES
-endif # OPENJ9_ENABLE_INLINE_TYPES
+# OLDEST_BOOT_JDK is not available directly, but it can be extracted
+# from BOOT_JDK_SOURCETARGET which has a value like:
+#     -source $OLDEST_BOOT_JDK -target $OLDEST_BOOT_JDK -Xlint:-options
+BOOT_JDK_VERSION := $(word 2, $(BOOT_JDK_SOURCETARGET))
 
-ifeq (true,$(OPENJ9_ENABLE_OPENJDK_METHODHANDLES))
-  JPP_TAGS += OPENJDK_METHODHANDLES
-endif # OPENJ9_ENABLE_OPENJDK_METHODHANDLES
-
-$(J9JCL_SOURCES_DONEFILE) : $(AllJclSource) $(AllDdrSource)
+$(J9JCL_SOURCES_DONEFILE) : \
+		$(foreach dir, $(JppSourceDirs), $(call RecursiveWildcard,$(dir),*)) \
+		$(COPY_OVERLAY_FILES)
 	@$(ECHO) Building OpenJ9 Java Preprocessor
 	@$(MKDIR) -p $(J9TOOLS_DIR)
 	$(MAKE) $(MAKE_ARGS) -C $(OPENJ9_TOPDIR)/sourcetools -f buildj9tools.mk \
 		BOOT_JDK=$(BOOT_JDK) \
-		DEST_DIR=$(call FixPath,$(J9TOOLS_DIR)) \
+		DEST_DIR=$(call MixedPath,$(J9TOOLS_DIR)) \
 		JAVA_HOME=$(BOOT_JDK) \
 		preprocessor
 	@$(ECHO) Generating J9JCL sources
-	@$(BOOT_JDK)/bin/java \
-		-cp "$(call FixPath,$(JPP_JAR))" \
-		-Dfile.encoding=US-ASCII \
-		com.ibm.jpp.commandline.CommandlineBuilder \
-			-verdict \
-			-baseDir "$(call FixPath,$(OPENJ9_TOPDIR))/" \
-			-config JAVA$(VERSION_FEATURE) \
-			-srcRoot jcl/ \
-			-xml jpp_configuration.xml \
-			-dest "$(call FixPath,$(J9JCL_SOURCES_DIR))" \
-			-tag:define "$(subst $(SPACE),;,$(sort $(JPP_TAGS)))"
+	$(call RunJPP, JAVA$(VERSION_FEATURE), $(SUPPORT_OUTPUTDIR)/overlay, /j9jcl, $(IncludeIfUnsure))
+	$(call RunJPP, JAVA$(VERSION_FEATURE), $(TOPDIR)/closed, /j9jcl, $(IncludeIfUnsure))
+	$(call RunJPP, JAVA$(VERSION_FEATURE), $(OPENJ9_TOPDIR)/jcl, /j9jcl)
   ifeq (true,$(OPENJ9_ENABLE_DDR))
 	@$(ECHO) Generating DDR_VM sources
-	@$(BOOT_JDK)/bin/java \
-		-cp "$(call FixPath,$(JPP_JAR))" \
-		-Dfile.encoding=US-ASCII \
-		com.ibm.jpp.commandline.CommandlineBuilder \
-			-includeIfUnsure \
-			-noWarnIncludeIf \
-			-verdict \
-			-baseDir "$(call FixPath,$(OPENJ9_TOPDIR)/debugtools)/" \
-			-config DDR_VM \
-			-srcRoot DDR_VM/ \
-			-xml "$(call FixPath,$(OPENJ9_TOPDIR)/jcl/jpp_configuration.xml)/" \
-			-dest "$(call FixPath,$(J9JCL_SOURCES_DIR)/openj9.dtfj/share/classes)" \
-			-macro:define "JAVA_SPEC_VERSION=$(VERSION_FEATURE)" \
-			-tag:define "$(subst $(SPACE),;,$(sort $(JPP_TAGS)))"
+	$(call RunJPP, GENERIC, $(OPENJ9_TOPDIR)/debugtools/DDR_VM/src, /j9jcl/openj9.dtfj/share/classes, \
+		$(IncludeIfUnsure) -macro:define JAVA_SPEC_VERSION=$(VERSION_FEATURE))
+    # Also generate source that can be used with the boot JDK.
+	@$(ECHO) Generating DDR_VM interim sources
+	$(call RunJPP, GENERIC, $(OPENJ9_TOPDIR)/debugtools/DDR_VM/src, /ddr/interim, \
+		$(IncludeIfUnsure) -macro:define JAVA_SPEC_VERSION=$(BOOT_JDK_VERSION))
   endif # OPENJ9_ENABLE_DDR
 	@$(MKDIR) -p $(@D)
 	@$(TOUCH) $@

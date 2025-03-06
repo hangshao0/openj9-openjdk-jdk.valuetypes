@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,10 +25,14 @@
 
 /*
  * @test
- * @run testng/othervm -Diters=10    -Xint                   VarHandleTestAccessLong
- * @run testng/othervm -Diters=20000 -XX:TieredStopAtLevel=1 VarHandleTestAccessLong
- * @run testng/othervm -Diters=20000                         VarHandleTestAccessLong
- * @run testng/othervm -Diters=20000 -XX:-TieredCompilation  VarHandleTestAccessLong
+ * @run testng/othervm -Diters=10   -Xint                                                   VarHandleTestAccessLong
+ *
+ * @comment Set CompileThresholdScaling to 0.1 so that the warmup loop sets to 2000 iterations
+ *          to hit compilation thresholds
+ *
+ * @run testng/othervm -Diters=2000 -XX:CompileThresholdScaling=0.1 -XX:TieredStopAtLevel=1 VarHandleTestAccessLong
+ * @run testng/othervm -Diters=2000 -XX:CompileThresholdScaling=0.1                         VarHandleTestAccessLong
+ * @run testng/othervm -Diters=2000 -XX:CompileThresholdScaling=0.1 -XX:-TieredCompilation  VarHandleTestAccessLong
  */
 
 import org.testng.annotations.BeforeClass;
@@ -44,8 +48,6 @@ import java.util.List;
 import static org.testng.Assert.*;
 
 public class VarHandleTestAccessLong extends VarHandleBaseTest {
-    static final Class<?> type = long.class;
-
     static final long static_final_v = 0x0123456789ABCDEFL;
 
     static long static_v;
@@ -72,7 +74,6 @@ public class VarHandleTestAccessLong extends VarHandleBaseTest {
 
     VarHandle vhArray;
 
-    VarHandle vhValueTypeField;
 
     VarHandle[] allocate(boolean same) {
         List<VarHandle> vhs = new ArrayList<>();
@@ -81,19 +82,19 @@ public class VarHandleTestAccessLong extends VarHandleBaseTest {
         VarHandle vh;
         try {
             vh = MethodHandles.lookup().findVarHandle(
-                    VarHandleTestAccessLong.class, "final_v" + postfix, type);
+                    VarHandleTestAccessLong.class, "final_v" + postfix, long.class);
             vhs.add(vh);
 
             vh = MethodHandles.lookup().findVarHandle(
-                    VarHandleTestAccessLong.class, "v" + postfix, type);
+                    VarHandleTestAccessLong.class, "v" + postfix, long.class);
             vhs.add(vh);
 
             vh = MethodHandles.lookup().findStaticVarHandle(
-                VarHandleTestAccessLong.class, "static_final_v" + postfix, type);
+                VarHandleTestAccessLong.class, "static_final_v" + postfix, long.class);
             vhs.add(vh);
 
             vh = MethodHandles.lookup().findStaticVarHandle(
-                VarHandleTestAccessLong.class, "static_v" + postfix, type);
+                VarHandleTestAccessLong.class, "static_v" + postfix, long.class);
             vhs.add(vh);
 
             if (same) {
@@ -112,21 +113,18 @@ public class VarHandleTestAccessLong extends VarHandleBaseTest {
     @BeforeClass
     public void setup() throws Exception {
         vhFinalField = MethodHandles.lookup().findVarHandle(
-                VarHandleTestAccessLong.class, "final_v", type);
+                VarHandleTestAccessLong.class, "final_v", long.class);
 
         vhField = MethodHandles.lookup().findVarHandle(
-                VarHandleTestAccessLong.class, "v", type);
+                VarHandleTestAccessLong.class, "v", long.class);
 
         vhStaticFinalField = MethodHandles.lookup().findStaticVarHandle(
-            VarHandleTestAccessLong.class, "static_final_v", type);
+            VarHandleTestAccessLong.class, "static_final_v", long.class);
 
         vhStaticField = MethodHandles.lookup().findStaticVarHandle(
-            VarHandleTestAccessLong.class, "static_v", type);
+            VarHandleTestAccessLong.class, "static_v", long.class);
 
         vhArray = MethodHandles.arrayElementVarHandle(long[].class);
-
-        vhValueTypeField = MethodHandles.lookup().findVarHandle(
-                    Value.class, "long_v", type);
     }
 
 
@@ -211,7 +209,7 @@ public class VarHandleTestAccessLong extends VarHandleBaseTest {
 
     @Test(dataProvider = "typesProvider")
     public void testTypes(VarHandle vh, List<Class<?>> pts) {
-        assertEquals(vh.varType(), type);
+        assertEquals(vh.varType(), long.class);
 
         assertEquals(vh.coordinateTypes(), pts);
 
@@ -223,12 +221,12 @@ public class VarHandleTestAccessLong extends VarHandleBaseTest {
     public void testLookupInstanceToStatic() {
         checkIAE("Lookup of static final field to instance final field", () -> {
             MethodHandles.lookup().findStaticVarHandle(
-                    VarHandleTestAccessLong.class, "final_v", type);
+                    VarHandleTestAccessLong.class, "final_v", long.class);
         });
 
         checkIAE("Lookup of static field to instance field", () -> {
             MethodHandles.lookup().findStaticVarHandle(
-                    VarHandleTestAccessLong.class, "v", type);
+                    VarHandleTestAccessLong.class, "v", long.class);
         });
     }
 
@@ -236,12 +234,12 @@ public class VarHandleTestAccessLong extends VarHandleBaseTest {
     public void testLookupStaticToInstance() {
         checkIAE("Lookup of instance final field to static final field", () -> {
             MethodHandles.lookup().findVarHandle(
-                VarHandleTestAccessLong.class, "static_final_v", type);
+                VarHandleTestAccessLong.class, "static_final_v", long.class);
         });
 
         checkIAE("Lookup of instance field to static field", () -> {
             vhStaticField = MethodHandles.lookup().findVarHandle(
-                VarHandleTestAccessLong.class, "static_v", type);
+                VarHandleTestAccessLong.class, "static_v", long.class);
         });
     }
 
@@ -282,11 +280,6 @@ public class VarHandleTestAccessLong extends VarHandleBaseTest {
         cases.add(new VarHandleAccessTestCase("Array index out of bounds",
                                               vhArray, VarHandleTestAccessLong::testArrayIndexOutOfBounds,
                                               false));
-        cases.add(new VarHandleAccessTestCase("Value type field",
-                                              vhValueTypeField, vh -> testValueTypeField(Value.getInstance(), vh)));
-        cases.add(new VarHandleAccessTestCase("Value type field unsupported",
-                                              vhValueTypeField, vh -> testValueTypeFieldUnsupported(Value.getInstance(), vh),
-                                              false));
         // Work around issue with jtreg summary reporting which truncates
         // the String result of Object.toString to 30 characters, hence
         // the first dummy argument
@@ -301,9 +294,6 @@ public class VarHandleTestAccessLong extends VarHandleBaseTest {
             atc.testAccess(t);
         }
     }
-
-
-
 
     static void testInstanceFinalField(VarHandleTestAccessLong recv, VarHandle vh) {
         // Plain
@@ -353,19 +343,6 @@ public class VarHandleTestAccessLong extends VarHandleBaseTest {
 
     }
 
-    static void testValueTypeField(Value recv, VarHandle vh) {
-        // Plain
-        {
-            long x = (long) vh.get(recv);
-            assertEquals(x, 0x0123456789ABCDEFL, "get long value");
-        }
-    }
-
-    static void testValueTypeFieldUnsupported(Value recv, VarHandle vh) {
-        checkUOE(() -> {
-            vh.set(recv, 0xCAFEBABECAFEBABEL);
-        });
-    }
 
     static void testStaticFinalField(VarHandle vh) {
         // Plain
@@ -509,40 +486,72 @@ public class VarHandleTestAccessLong extends VarHandleBaseTest {
             boolean success = false;
             for (int c = 0; c < WEAK_ATTEMPTS && !success; c++) {
                 success = vh.weakCompareAndSetPlain(recv, 0x0123456789ABCDEFL, 0xCAFEBABECAFEBABEL);
+                if (!success) weakDelay();
             }
-            assertEquals(success, true, "weakCompareAndSetPlain long");
+            assertEquals(success, true, "success weakCompareAndSetPlain long");
             long x = (long) vh.get(recv);
-            assertEquals(x, 0xCAFEBABECAFEBABEL, "weakCompareAndSetPlain long value");
+            assertEquals(x, 0xCAFEBABECAFEBABEL, "success weakCompareAndSetPlain long value");
+        }
+
+        {
+            boolean success = vh.weakCompareAndSetPlain(recv, 0x0123456789ABCDEFL, 0xDEADBEEFDEADBEEFL);
+            assertEquals(success, false, "failing weakCompareAndSetPlain long");
+            long x = (long) vh.get(recv);
+            assertEquals(x, 0xCAFEBABECAFEBABEL, "failing weakCompareAndSetPlain long value");
         }
 
         {
             boolean success = false;
             for (int c = 0; c < WEAK_ATTEMPTS && !success; c++) {
                 success = vh.weakCompareAndSetAcquire(recv, 0xCAFEBABECAFEBABEL, 0x0123456789ABCDEFL);
+                if (!success) weakDelay();
             }
-            assertEquals(success, true, "weakCompareAndSetAcquire long");
+            assertEquals(success, true, "success weakCompareAndSetAcquire long");
             long x = (long) vh.get(recv);
-            assertEquals(x, 0x0123456789ABCDEFL, "weakCompareAndSetAcquire long");
+            assertEquals(x, 0x0123456789ABCDEFL, "success weakCompareAndSetAcquire long");
+        }
+
+        {
+            boolean success = vh.weakCompareAndSetAcquire(recv, 0xCAFEBABECAFEBABEL, 0xDEADBEEFDEADBEEFL);
+            assertEquals(success, false, "failing weakCompareAndSetAcquire long");
+            long x = (long) vh.get(recv);
+            assertEquals(x, 0x0123456789ABCDEFL, "failing weakCompareAndSetAcquire long value");
         }
 
         {
             boolean success = false;
             for (int c = 0; c < WEAK_ATTEMPTS && !success; c++) {
                 success = vh.weakCompareAndSetRelease(recv, 0x0123456789ABCDEFL, 0xCAFEBABECAFEBABEL);
+                if (!success) weakDelay();
             }
-            assertEquals(success, true, "weakCompareAndSetRelease long");
+            assertEquals(success, true, "success weakCompareAndSetRelease long");
             long x = (long) vh.get(recv);
-            assertEquals(x, 0xCAFEBABECAFEBABEL, "weakCompareAndSetRelease long");
+            assertEquals(x, 0xCAFEBABECAFEBABEL, "success weakCompareAndSetRelease long");
+        }
+
+        {
+            boolean success = vh.weakCompareAndSetRelease(recv, 0x0123456789ABCDEFL, 0xDEADBEEFDEADBEEFL);
+            assertEquals(success, false, "failing weakCompareAndSetRelease long");
+            long x = (long) vh.get(recv);
+            assertEquals(x, 0xCAFEBABECAFEBABEL, "failing weakCompareAndSetRelease long value");
         }
 
         {
             boolean success = false;
             for (int c = 0; c < WEAK_ATTEMPTS && !success; c++) {
                 success = vh.weakCompareAndSet(recv, 0xCAFEBABECAFEBABEL, 0x0123456789ABCDEFL);
+                if (!success) weakDelay();
             }
-            assertEquals(success, true, "weakCompareAndSet long");
+            assertEquals(success, true, "success weakCompareAndSet long");
             long x = (long) vh.get(recv);
-            assertEquals(x, 0x0123456789ABCDEFL, "weakCompareAndSet long value");
+            assertEquals(x, 0x0123456789ABCDEFL, "success weakCompareAndSet long value");
+        }
+
+        {
+            boolean success = vh.weakCompareAndSet(recv, 0xCAFEBABECAFEBABEL, 0xDEADBEEFDEADBEEFL);
+            assertEquals(success, false, "failing weakCompareAndSet long");
+            long x = (long) vh.get(recv);
+            assertEquals(x, 0x0123456789ABCDEFL, "failing weakCompareAndSet long value");
         }
 
         // Compare set and get
@@ -785,40 +794,72 @@ public class VarHandleTestAccessLong extends VarHandleBaseTest {
             boolean success = false;
             for (int c = 0; c < WEAK_ATTEMPTS && !success; c++) {
                 success = vh.weakCompareAndSetPlain(0x0123456789ABCDEFL, 0xCAFEBABECAFEBABEL);
+                if (!success) weakDelay();
             }
-            assertEquals(success, true, "weakCompareAndSetPlain long");
+            assertEquals(success, true, "success weakCompareAndSetPlain long");
             long x = (long) vh.get();
-            assertEquals(x, 0xCAFEBABECAFEBABEL, "weakCompareAndSetPlain long value");
+            assertEquals(x, 0xCAFEBABECAFEBABEL, "success weakCompareAndSetPlain long value");
+        }
+
+        {
+            boolean success = vh.weakCompareAndSetPlain(0x0123456789ABCDEFL, 0xDEADBEEFDEADBEEFL);
+            assertEquals(success, false, "failing weakCompareAndSetPlain long");
+            long x = (long) vh.get();
+            assertEquals(x, 0xCAFEBABECAFEBABEL, "failing weakCompareAndSetPlain long value");
         }
 
         {
             boolean success = false;
             for (int c = 0; c < WEAK_ATTEMPTS && !success; c++) {
                 success = vh.weakCompareAndSetAcquire(0xCAFEBABECAFEBABEL, 0x0123456789ABCDEFL);
+                if (!success) weakDelay();
             }
-            assertEquals(success, true, "weakCompareAndSetAcquire long");
+            assertEquals(success, true, "success weakCompareAndSetAcquire long");
             long x = (long) vh.get();
-            assertEquals(x, 0x0123456789ABCDEFL, "weakCompareAndSetAcquire long");
+            assertEquals(x, 0x0123456789ABCDEFL, "success weakCompareAndSetAcquire long");
+        }
+
+        {
+            boolean success = vh.weakCompareAndSetAcquire(0xCAFEBABECAFEBABEL, 0xDEADBEEFDEADBEEFL);
+            assertEquals(success, false, "failing weakCompareAndSetAcquire long");
+            long x = (long) vh.get();
+            assertEquals(x, 0x0123456789ABCDEFL, "failing weakCompareAndSetAcquire long value");
         }
 
         {
             boolean success = false;
             for (int c = 0; c < WEAK_ATTEMPTS && !success; c++) {
                 success = vh.weakCompareAndSetRelease(0x0123456789ABCDEFL, 0xCAFEBABECAFEBABEL);
+                if (!success) weakDelay();
             }
-            assertEquals(success, true, "weakCompareAndSetRelease long");
+            assertEquals(success, true, "success weakCompareAndSetRelease long");
             long x = (long) vh.get();
-            assertEquals(x, 0xCAFEBABECAFEBABEL, "weakCompareAndSetRelease long");
+            assertEquals(x, 0xCAFEBABECAFEBABEL, "success weakCompareAndSetRelease long");
+        }
+
+        {
+            boolean success = vh.weakCompareAndSetRelease(0x0123456789ABCDEFL, 0xDEADBEEFDEADBEEFL);
+            assertEquals(success, false, "failing weakCompareAndSetRelease long");
+            long x = (long) vh.get();
+            assertEquals(x, 0xCAFEBABECAFEBABEL, "failing weakCompareAndSetRelease long value");
         }
 
         {
             boolean success = false;
             for (int c = 0; c < WEAK_ATTEMPTS && !success; c++) {
                 success = vh.weakCompareAndSet(0xCAFEBABECAFEBABEL, 0x0123456789ABCDEFL);
+                if (!success) weakDelay();
             }
-            assertEquals(success, true, "weakCompareAndSet long");
+            assertEquals(success, true, "success weakCompareAndSet long");
             long x = (long) vh.get();
-            assertEquals(x, 0x0123456789ABCDEFL, "weakCompareAndSet long");
+            assertEquals(x, 0x0123456789ABCDEFL, "success weakCompareAndSet long");
+        }
+
+        {
+            boolean success = vh.weakCompareAndSet(0xCAFEBABECAFEBABEL, 0xDEADBEEFDEADBEEFL);
+            assertEquals(success, false, "failing weakCompareAndSet long");
+            long x = (long) vh.get();
+            assertEquals(x, 0x0123456789ABCDEFL, "failing weakCompareAndSet long value");
         }
 
         // Compare set and get
@@ -1064,40 +1105,72 @@ public class VarHandleTestAccessLong extends VarHandleBaseTest {
                 boolean success = false;
                 for (int c = 0; c < WEAK_ATTEMPTS && !success; c++) {
                     success = vh.weakCompareAndSetPlain(array, i, 0x0123456789ABCDEFL, 0xCAFEBABECAFEBABEL);
+                    if (!success) weakDelay();
                 }
-                assertEquals(success, true, "weakCompareAndSetPlain long");
+                assertEquals(success, true, "success weakCompareAndSetPlain long");
                 long x = (long) vh.get(array, i);
-                assertEquals(x, 0xCAFEBABECAFEBABEL, "weakCompareAndSetPlain long value");
+                assertEquals(x, 0xCAFEBABECAFEBABEL, "success weakCompareAndSetPlain long value");
+            }
+
+            {
+                boolean success = vh.weakCompareAndSetPlain(array, i, 0x0123456789ABCDEFL, 0xDEADBEEFDEADBEEFL);
+                assertEquals(success, false, "failing weakCompareAndSetPlain long");
+                long x = (long) vh.get(array, i);
+                assertEquals(x, 0xCAFEBABECAFEBABEL, "failing weakCompareAndSetPlain long value");
             }
 
             {
                 boolean success = false;
                 for (int c = 0; c < WEAK_ATTEMPTS && !success; c++) {
                     success = vh.weakCompareAndSetAcquire(array, i, 0xCAFEBABECAFEBABEL, 0x0123456789ABCDEFL);
+                    if (!success) weakDelay();
                 }
-                assertEquals(success, true, "weakCompareAndSetAcquire long");
+                assertEquals(success, true, "success weakCompareAndSetAcquire long");
                 long x = (long) vh.get(array, i);
-                assertEquals(x, 0x0123456789ABCDEFL, "weakCompareAndSetAcquire long");
+                assertEquals(x, 0x0123456789ABCDEFL, "success weakCompareAndSetAcquire long");
+            }
+
+            {
+                boolean success = vh.weakCompareAndSetAcquire(array, i, 0xCAFEBABECAFEBABEL, 0xDEADBEEFDEADBEEFL);
+                assertEquals(success, false, "failing weakCompareAndSetAcquire long");
+                long x = (long) vh.get(array, i);
+                assertEquals(x, 0x0123456789ABCDEFL, "failing weakCompareAndSetAcquire long value");
             }
 
             {
                 boolean success = false;
                 for (int c = 0; c < WEAK_ATTEMPTS && !success; c++) {
                     success = vh.weakCompareAndSetRelease(array, i, 0x0123456789ABCDEFL, 0xCAFEBABECAFEBABEL);
+                    if (!success) weakDelay();
                 }
-                assertEquals(success, true, "weakCompareAndSetRelease long");
+                assertEquals(success, true, "success weakCompareAndSetRelease long");
                 long x = (long) vh.get(array, i);
-                assertEquals(x, 0xCAFEBABECAFEBABEL, "weakCompareAndSetRelease long");
+                assertEquals(x, 0xCAFEBABECAFEBABEL, "success weakCompareAndSetRelease long");
+            }
+
+            {
+                boolean success = vh.weakCompareAndSetRelease(array, i, 0x0123456789ABCDEFL, 0xDEADBEEFDEADBEEFL);
+                assertEquals(success, false, "failing weakCompareAndSetRelease long");
+                long x = (long) vh.get(array, i);
+                assertEquals(x, 0xCAFEBABECAFEBABEL, "failing weakCompareAndSetRelease long value");
             }
 
             {
                 boolean success = false;
                 for (int c = 0; c < WEAK_ATTEMPTS && !success; c++) {
                     success = vh.weakCompareAndSet(array, i, 0xCAFEBABECAFEBABEL, 0x0123456789ABCDEFL);
+                    if (!success) weakDelay();
                 }
-                assertEquals(success, true, "weakCompareAndSet long");
+                assertEquals(success, true, "success weakCompareAndSet long");
                 long x = (long) vh.get(array, i);
-                assertEquals(x, 0x0123456789ABCDEFL, "weakCompareAndSet long");
+                assertEquals(x, 0x0123456789ABCDEFL, "success weakCompareAndSet long");
+            }
+
+            {
+                boolean success = vh.weakCompareAndSet(array, i, 0xCAFEBABECAFEBABEL, 0xDEADBEEFDEADBEEFL);
+                assertEquals(success, false, "failing weakCompareAndSet long");
+                long x = (long) vh.get(array, i);
+                assertEquals(x, 0x0123456789ABCDEFL, "failing weakCompareAndSet long value");
             }
 
             // Compare set and get

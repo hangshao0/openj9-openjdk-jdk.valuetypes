@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2018, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -65,7 +65,6 @@ public class ModuleDotGraph {
         this(config,
              config.rootModules().stream()
                    .map(Module::name)
-                   .sorted()
                    .collect(toMap(Function.identity(), mn -> config.resolve(Set.of(mn)))),
              apiOnly);
     }
@@ -333,7 +332,7 @@ public class ModuleDotGraph {
 
         private final String name;
         private final Graph<String> graph;
-        private final Set<ModuleDescriptor> descriptors = new TreeSet<>();
+        private final TreeSet<ModuleDescriptor> descriptors = new TreeSet<>();
         private final List<SubGraph> subgraphs = new ArrayList<>();
         private final Attributes attributes;
         public DotGraphBuilder(String name,
@@ -354,7 +353,7 @@ public class ModuleDotGraph {
                  PrintWriter out = new PrintWriter(writer)) {
 
                 out.format("digraph \"%s\" {%n", name);
-                out.format("  nodesep=%f;%n", attributes.nodeSep());
+                out.format((Locale)null, "  nodesep=%f;%n", attributes.nodeSep());
                 out.format((Locale)null, "  ranksep=%f;%n", attributes.rankSep());
                 out.format("  pencolor=transparent;%n");
                 out.format("  node [shape=plaintext, fontcolor=\"%s\", fontname=\"%s\","
@@ -414,7 +413,7 @@ public class ModuleDotGraph {
                 .collect(toSet());
 
             String mn = md.name();
-            edges.forEach(dn -> {
+            edges.stream().sorted().forEach(dn -> {
                 String attr = "";
                 if (dn.equals("java.base")) {
                     attr = "color=\"" + attributes.requiresMandatedColor() + "\"";

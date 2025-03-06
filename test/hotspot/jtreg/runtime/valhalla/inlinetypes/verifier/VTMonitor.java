@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,33 +25,27 @@
  * @test
  * @bug 8227373
  * @summary Test that verifier allows monitor operations on inline types.
- * @compile -XDallowWithFieldOperator VTMonitor.java
+ * @enablePreview
+ * @compile  VTMonitor.java
  * @run main/othervm -Xverify:remote VTMonitor
  */
 
-public primitive final class VTMonitor {
+public value final class VTMonitor {
     final int x;
     final int y;
 
-    private VTMonitor() {
-        x = 0;
-        y = 0;
-    }
-
-    public static VTMonitor createVTMonitor(int x, int y) {
-        VTMonitor p = VTMonitor.default;
-        p = __WithField(p.x, x);
-        p = __WithField(p.y, y);
-        return p;
+    public VTMonitor(int x, int y) {
+        this.x = x;
+        this.y = y;
     }
 
     public static void main(String[] args) {
-        Object a = createVTMonitor(3, 4);
+        Object a = new VTMonitor(3, 4);
         try {
             synchronized(a) {
                 throw new RuntimeException("Synchronization on inline type should fail");
             }
-        } catch (java.lang.IllegalMonitorStateException e) {
+        } catch (java.lang.IdentityException e) {
             // Expected
         }
     }

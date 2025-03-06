@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -23,9 +23,13 @@
 
 package runtime.valhalla.inlinetypes;
 
+import jdk.internal.vm.annotation.ImplicitlyConstructible;
+import jdk.internal.vm.annotation.LooselyConsistentValue;
 import jdk.test.lib.Asserts;
 
-public final primitive class Long8Inline {
+@ImplicitlyConstructible
+@LooselyConsistentValue
+public final value class Long8Inline {
 
     final long longField1;
     final long longField2;
@@ -36,7 +40,7 @@ public final primitive class Long8Inline {
     final long longField7;
     final long longField8;
 
-    private Long8Inline(long l1, long l2, long l3, long l4, long l5, long l6, long l7, long l8) {
+    public Long8Inline(long l1, long l2, long l3, long l4, long l5, long l6, long l7, long l8) {
         longField1 = l1;
         longField2 = l2;
         longField3 = l3;
@@ -55,17 +59,6 @@ public final primitive class Long8Inline {
     public long getLongField6() { return longField6; }
     public long getLongField7() { return longField7; }
     public long getLongField8() { return longField8; }
-
-    public static Long8Inline create(long long1,
-            long long2,
-            long long3,
-            long long4,
-            long long5,
-            long long6,
-            long long7,
-            long long8) {
-        return new Long8Inline(long1, long2, long3, long4, long5, long6, long7, long8);
-    }
 
     static void check(Long8Inline value,
             long long1,

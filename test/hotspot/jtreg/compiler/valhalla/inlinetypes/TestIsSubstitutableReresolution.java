@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -22,18 +22,21 @@
  */
 
 package compiler.valhalla.inlinetypes;
+
 import jdk.test.lib.Asserts;
 
 /**
  * @test
  * @bug 8234108
  * @library /testlibrary /test/lib
- * @summary Verify that call reresolution works for C2 compiled calls to java.lang.runtime.PrimitiveObjectMethods::isSubstitutable0.
+ * @summary Verify that call reresolution works for C2 compiled calls to java.lang.runtime.ValueObjectMethods::isSubstitutable0.
+ * @enablePreview
  * @run main/othervm -XX:CompileCommand=dontinline,compiler.valhalla.inlinetypes.TestIsSubstitutableReresolution::test
  *                   compiler.valhalla.inlinetypes.TestIsSubstitutableReresolution
  */
-final primitive class MyValue {
-    final int x;
+
+value class MyValue {
+    int x;
 
     public MyValue(int x) {
         this.x = x;

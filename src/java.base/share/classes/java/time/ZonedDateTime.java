@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2019, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -144,11 +144,18 @@ import java.util.Objects;
  * represents an instant, especially during a daylight savings overlap.
  * <p>
  * This is a <a href="{@docRoot}/java.base/java/lang/doc-files/ValueBased.html">value-based</a>
- * class; programmers should treat instances that are
- * {@linkplain #equals(Object) equal} as interchangeable and should not
- * use instances for synchronization, or unpredictable behavior may
- * occur. For example, in a future release, synchronization may fail.
- * The {@code equals} method should be used for comparisons.
+ * class; programmers should treat instances that are {@linkplain #equals(Object) equal}
+ * as interchangeable and should not use instances for synchronization, mutexes, or
+ * with {@linkplain java.lang.ref.Reference object references}.
+ *
+ * <div class="preview-block">
+ *      <div class="preview-comment">
+ *          When preview features are enabled, {@code ZonedDateTime} is a {@linkplain Class#isValue value class}.
+ *          Use of value class instances for synchronization, mutexes, or with
+ *          {@linkplain java.lang.ref.Reference object references} result in
+ *          {@link IdentityException}.
+ *      </div>
+ * </div>
  *
  * @implSpec
  * A {@code ZonedDateTime} holds state equivalent to three separate objects,
@@ -162,6 +169,7 @@ import java.util.Objects;
  * @since 1.8
  */
 @jdk.internal.ValueBased
+@jdk.internal.MigratedValueClass
 public final class ZonedDateTime
         implements Temporal, ChronoZonedDateTime<LocalDate>, Serializable {
 
@@ -172,15 +180,15 @@ public final class ZonedDateTime
     private static final long serialVersionUID = -6260982410461394882L;
 
     /**
-     * The local date-time.
+     * @serial The local date-time.
      */
     private final LocalDateTime dateTime;
     /**
-     * The offset from UTC/Greenwich.
+     * @serial The offset from UTC/Greenwich.
      */
     private final ZoneOffset offset;
     /**
-     * The time-zone.
+     * @serial The time-zone.
      */
     private final ZoneId zone;
 
@@ -452,9 +460,9 @@ public final class ZonedDateTime
      * @throws DateTimeException if the result exceeds the supported range
      */
     private static ZonedDateTime create(long epochSecond, int nanoOfSecond, ZoneId zone) {
-        ZoneRules rules = zone.getRules();
-        Instant instant = Instant.ofEpochSecond(epochSecond, nanoOfSecond);  // TODO: rules should be queryable by epochSeconds
-        ZoneOffset offset = rules.getOffset(instant);
+        // nanoOfSecond is in a range that'll not affect epochSecond, validated
+        // by LocalDateTime.ofEpochSecond
+        ZoneOffset offset = zone.getOffset(epochSecond);
         LocalDateTime ldt = LocalDateTime.ofEpochSecond(epochSecond, nanoOfSecond, offset);
         return new ZonedDateTime(ldt, offset, zone);
     }
@@ -2207,17 +2215,27 @@ public final class ZonedDateTime
      * <p>
      * The format consists of the {@code LocalDateTime} followed by the {@code ZoneOffset}.
      * If the {@code ZoneId} is not the same as the offset, then the ID is output.
-     * The output is compatible with ISO-8601 if the offset and ID are the same.
+     * The output is compatible with ISO-8601 if the offset and ID are the same,
+     * and the seconds in the offset are zero.
      *
      * @return a string representation of this date-time, not null
      */
     @Override  // override for Javadoc
     public String toString() {
-        String str = dateTime.toString() + offset.toString();
+        var offsetStr = offset.toString();
+        var zoneStr = (String) null;
+        int length = 29 + offsetStr.length();
         if (offset != zone) {
-            str += '[' + zone.toString() + ']';
+            zoneStr = zone.toString();
+            length += zoneStr.length() + 2;
         }
-        return str;
+        var buf = new StringBuilder(length);
+        dateTime.formatTo(buf);
+        buf.append(offsetStr);
+        if (zoneStr != null) {
+            buf.append('[').append(zoneStr).append(']');
+        }
+        return buf.toString();
     }
 
     //-----------------------------------------------------------------------

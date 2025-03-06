@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -23,12 +23,19 @@
 
 package runtime.valhalla.inlinetypes;
 
+import jdk.internal.value.ValueClass;
+import jdk.internal.vm.annotation.ImplicitlyConstructible;
+import jdk.internal.vm.annotation.LooselyConsistentValue;
+
 /*
  * @test Test8186715
  * @summary test return of buffered inline type passed in argument by caller
  * @library /test/lib
- * @compile -XDallowWithFieldOperator Test8186715.java
- * @run main runtime.valhalla.inlinetypes.Test8186715
+ * @modules java.base/jdk.internal.vm.annotation
+ *          java.base/jdk.internal.value
+ * @enablePreview
+ * @compile Test8186715.java
+ * @run main/othervm runtime.valhalla.inlinetypes.Test8186715
  */
 
 public class Test8186715 {
@@ -42,23 +49,25 @@ public class Test8186715 {
     }
 }
 
-primitive final class MyValueType {
+@ImplicitlyConstructible
+@LooselyConsistentValue
+value class MyValueType {
     final int i;
     final int j;
 
-    private MyValueType() {
-        i = 0;
-        j = 0;
+    private MyValueType(int i, int j) {
+        this.i = i;
+        this.j = j;
     }
 
     static MyValueType testDefault() {
-        return MyValueType.default;
+        MyValueType[] array = (MyValueType[])ValueClass.newNullRestrictedArray(MyValueType.class, 1);
+        return array[0];
     }
 
     static MyValueType testBranchArg1(boolean flag, MyValueType v1) {
         if (flag) {
-            v1 = __WithField(v1.i, 3);
-            v1 = __WithField(v1.j, 4);
+            v1 = new MyValueType(3, 4);
         }
         return v1;
     }

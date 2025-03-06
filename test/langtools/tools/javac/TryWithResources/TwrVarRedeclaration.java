@@ -7,7 +7,7 @@
 
 public class TwrVarRedeclaration implements AutoCloseable {
 
-    public static void main(String... args) {
+    public static void meth() {
         TwrVarRedeclaration r = new TwrVarRedeclaration();
 
         try (r) {
@@ -15,7 +15,7 @@ public class TwrVarRedeclaration implements AutoCloseable {
         }
 
         try (r) {
-            Object r = new Object() {};
+            Object r = new Object();
         }
 
         try (r) {

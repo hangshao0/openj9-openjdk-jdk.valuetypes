@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,9 +24,9 @@
 /**
  * @test
  * @bug 8209687
- * @summary Verify that Parse::optimize_cmp_with_klass() works with inline types.
+ * @summary Verify that Parse::optimize_cmp_with_klass() works with value classes.
  * @library /test/lib
- * @compile TestOptimizeKlassCmp.java
+ * @enablePreview
  * @run main/othervm -Xbatch compiler.valhalla.inlinetypes.TestOptimizeKlassCmp
  */
 
@@ -34,8 +34,8 @@ package compiler.valhalla.inlinetypes;
 
 import jdk.test.lib.Asserts;
 
-primitive class MyValue {
-    public final int x;
+value class MyValue {
+    public int x;
 
     public MyValue(int x) {
         this.x = x;

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2019, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -87,6 +87,10 @@ public class TestSymtabItems {
             if (f.getName().toLowerCase().contains("methodhandle"))
                 continue;
 
+            // Temporarily ignore java.io.IO:
+            if (f.getName().equals("ioType"))
+                continue;
+
             //both noModule and unnamedModule claim the unnamed package, ignore noModule for now:
             if (f.getName().equals("noModule"))
                 continue;
@@ -129,12 +133,7 @@ public class TestSymtabItems {
         public Void visitModule(ModuleElement e, Void p) {
             show("module", e);
             indent(+1);
-            if (e.getQualifiedName().contentEquals("jdk.incubator.mvt")) {
-                //completion of a module with 'requires' directive will fail at this stage.
-                ((ModuleSymbol) e).completer = Completer.NULL_COMPLETER;
-            } else {
-                super.visitModule(e, p);
-            }
+            super.visitModule(e, p);
             indent(-1);
             return null;
         }

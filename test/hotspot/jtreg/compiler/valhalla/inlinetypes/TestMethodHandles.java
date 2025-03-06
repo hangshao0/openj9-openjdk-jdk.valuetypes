@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,14 +25,19 @@ package compiler.valhalla.inlinetypes;
 
 import compiler.lib.ir_framework.*;
 import jdk.test.lib.Asserts;
-import sun.hotspot.WhiteBox;
+import jdk.test.whitebox.WhiteBox;
 
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
 import java.lang.reflect.Method;
 
-import static compiler.valhalla.inlinetypes.InlineTypes.IRNode.*;
+import jdk.internal.value.ValueClass;
+import jdk.internal.vm.annotation.ImplicitlyConstructible;
+import jdk.internal.vm.annotation.LooselyConsistentValue;
+import jdk.internal.vm.annotation.NullRestricted;
+
+import static compiler.valhalla.inlinetypes.InlineTypeIRNode.*;
 import static compiler.valhalla.inlinetypes.InlineTypes.*;
 
 /*
@@ -41,7 +46,11 @@ import static compiler.valhalla.inlinetypes.InlineTypes.*;
  * @summary Test method handle support for inline types
  * @library /test/lib /
  * @requires (os.simpleArch == "x64" | os.simpleArch == "aarch64")
- * @run driver/timeout=300 compiler.valhalla.inlinetypes.TestMethodHandles
+ * @requires vm.opt.AbortVMOnCompilationFailure != true
+ * @enablePreview
+ * @modules java.base/jdk.internal.value
+ *          java.base/jdk.internal.vm.annotation
+ * @run main/othervm/timeout=300 compiler.valhalla.inlinetypes.TestMethodHandles
  */
 
 @ForceCompileClassInitializer
@@ -52,28 +61,28 @@ public class TestMethodHandles {
             Class<?> clazz = TestMethodHandles.class;
             MethodHandles.Lookup lookup = MethodHandles.lookup();
 
-            MethodType mt = MethodType.methodType(MyValue3.class.asValueType());
+            MethodType mt = MethodType.methodType(MyValue3.class);
             test1_mh = lookup.findVirtual(clazz, "test1_target", mt);
             test2_mh = lookup.findVirtual(clazz, "test2_target", mt);
             test3_mh = lookup.findVirtual(clazz, "test3_target", mt);
 
-            MethodType test4_mt1 = MethodType.methodType(int.class, MyValue1.class.asValueType());
-            MethodType test4_mt2 = MethodType.methodType(MyValue1.class.asValueType());
+            MethodType test4_mt1 = MethodType.methodType(int.class, MyValue1.class);
+            MethodType test4_mt2 = MethodType.methodType(MyValue1.class);
             MethodHandle test4_mh1 = lookup.findStatic(clazz, "test4_helper1", test4_mt1);
             MethodHandle test4_mh2 = lookup.findStatic(clazz, "test4_helper2", test4_mt2);
             test4_mh = MethodHandles.filterReturnValue(test4_mh2, test4_mh1);
 
-            MethodType test5_mt = MethodType.methodType(int.class, MyValue1.class.asValueType());
+            MethodType test5_mt = MethodType.methodType(int.class, MyValue1.class);
             test5_mh = lookup.findVirtual(clazz, "test5_target", test5_mt);
 
-            MethodType test6_mt = MethodType.methodType(MyValue3.class.asValueType());
+            MethodType test6_mt = MethodType.methodType(MyValue3.class);
             MethodHandle test6_mh1 = lookup.findVirtual(clazz, "test6_target1", test6_mt);
             MethodHandle test6_mh2 = lookup.findVirtual(clazz, "test6_target2", test6_mt);
             MethodType boolean_mt = MethodType.methodType(boolean.class);
             MethodHandle test6_mh_test = lookup.findVirtual(clazz, "test6_test", boolean_mt);
             test6_mh = MethodHandles.guardWithTest(test6_mh_test, test6_mh1, test6_mh2);
 
-            MethodType myvalue2_mt = MethodType.methodType(MyValue2.class.asValueType());
+            MethodType myvalue2_mt = MethodType.methodType(MyValue2.class);
             test7_mh1 = lookup.findStatic(clazz, "test7_target1", myvalue2_mt);
             MethodHandle test7_mh2 = lookup.findStatic(clazz, "test7_target2", myvalue2_mt);
             MethodHandle test7_mh_test = lookup.findStatic(clazz, "test7_test", boolean_mt);
@@ -88,7 +97,7 @@ public class TestMethodHandles {
                                                     MethodHandles.dropArguments(test8_mh1, 0, MethodHandle.class),
                                                     MethodHandles.invoker(myvalue2_mt));
 
-            MethodType test9_mt = MethodType.methodType(MyValue3.class.asValueType());
+            MethodType test9_mt = MethodType.methodType(MyValue3.class);
             MethodHandle test9_mh1 = lookup.findVirtual(clazz, "test9_target1", test9_mt);
             MethodHandle test9_mh2 = lookup.findVirtual(clazz, "test9_target2", test9_mt);
             MethodHandle test9_mh3 = lookup.findVirtual(clazz, "test9_target3", test9_mt);
@@ -99,12 +108,12 @@ public class TestMethodHandles {
                                                     test9_mh1,
                                                     MethodHandles.guardWithTest(test9_mh_test2, test9_mh2, test9_mh3));
 
-            MethodType test10_mt = MethodType.methodType(MyValue2.class.asValueType());
+            MethodType test10_mt = MethodType.methodType(MyValue2.class);
             MethodHandle test10_mh1 = lookup.findStatic(clazz, "test10_target1", test10_mt);
             test10_mh2 = lookup.findStatic(clazz, "test10_target2", test10_mt);
             test10_mh3 = lookup.findStatic(clazz, "test10_target3", test10_mt);
             MethodType test10_mt2 = MethodType.methodType(boolean.class);
-            MethodType test10_mt3 = MethodType.methodType(MyValue2.class.asValueType());
+            MethodType test10_mt3 = MethodType.methodType(MyValue2.class);
             MethodHandle test10_mh_test1 = lookup.findStatic(clazz, "test10_test1", test10_mt2);
             MethodHandle test10_mh_test2 = lookup.findStatic(clazz, "test10_test2", test10_mt2);
             test10_mh = MethodHandles.guardWithTest(test10_mh_test1,
@@ -136,6 +145,8 @@ public class TestMethodHandles {
 
         InlineTypes.getFramework()
                    .addScenarios(scenarios)
+                   .addFlags("-XX:CompileCommand=inline,java.lang.invoke.MethodHandleImpl::*")
+                   .addFlags("-XX:CompileCommand=inline,java.lang.invoke.LambdaForm*::*")
                    .addHelperClasses(MyValue1.class,
                                      MyValue2.class,
                                      MyValue2Inline.class,
@@ -145,6 +156,7 @@ public class TestMethodHandles {
     }
 
     // Everything inlined
+    @NullRestricted
     final MyValue3 test1_vt = MyValue3.create();
 
     @ForceInline
@@ -164,13 +176,16 @@ public class TestMethodHandles {
     }
 
     @Run(test = "test1")
+    @Warmup(10000)
     public void test1_verifier() throws Throwable {
         MyValue3 vt = test1();
         test1_vt.verify(vt);
     }
 
     // Leaf method not inlined but returned type is known
+    @NullRestricted
     final MyValue3 test2_vt = MyValue3.create();
+
     @DontInline
     MyValue3 test2_target() {
         return test2_vt;
@@ -196,7 +211,9 @@ public class TestMethodHandles {
     }
 
     // Leaf method not inlined and returned type not known
+    @NullRestricted
     final MyValue3 test3_vt = MyValue3.create();
+
     @DontInline
     MyValue3 test3_target() {
         return test3_vt;
@@ -227,7 +244,9 @@ public class TestMethodHandles {
         return vt.x;
     }
 
+    @NullRestricted
     static MyValue1 test4_vt = MyValue1.createWithFieldsInline(rI, rL);
+
     static public MyValue1 test4_helper2() {
         return test4_vt;
     }
@@ -251,6 +270,8 @@ public class TestMethodHandles {
     }
 
     static final MethodHandle test5_mh;
+
+    @NullRestricted
     MyValue1 test5_vt = MyValue1.createWithFieldsInline(rI, rL);
 
     @Test
@@ -266,13 +287,17 @@ public class TestMethodHandles {
 
     // Return of target1 and target2 merged in a Lambda Form as an
     // Object. Shouldn't cause any allocation
+    @NullRestricted
     final MyValue3 test6_vt1 = MyValue3.create();
+
     @ForceInline
     MyValue3 test6_target1() {
         return test6_vt1;
     }
 
+    @NullRestricted
     final MyValue3 test6_vt2 = MyValue3.create();
+
     @ForceInline
     MyValue3 test6_target2() {
         return test6_vt2;
@@ -368,19 +393,25 @@ public class TestMethodHandles {
 
     // Return of target1, target2 and target3 merged in Lambda Forms
     // as an Object. Shouldn't cause any allocation
+    @NullRestricted
     final MyValue3 test9_vt1 = MyValue3.create();
+
     @ForceInline
     MyValue3 test9_target1() {
         return test9_vt1;
     }
 
+    @NullRestricted
     final MyValue3 test9_vt2 = MyValue3.create();
+
     @ForceInline
     MyValue3 test9_target2() {
         return test9_vt2;
     }
 
+    @NullRestricted
     final MyValue3 test9_vt3 = MyValue3.create();
+
     @ForceInline
     MyValue3 test9_target3() {
         return test9_vt3;

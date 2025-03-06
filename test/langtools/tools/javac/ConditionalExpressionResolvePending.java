@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2022, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,6 +25,7 @@
  * @test
  * @bug 8234899
  * @summary Verify behavior w.r.t. preview feature API errors and warnings
+ * @enablePreview
  * @library /tools/lib /tools/javac/lib
  * @modules
  *      java.base/jdk.internal
@@ -35,13 +36,14 @@
  * @build toolbox.ToolBox toolbox.JavacTask
  * @build combo.ComboTestHelper
  * @compile ConditionalExpressionResolvePending.java
- * @run main/othervm --enable-preview ConditionalExpressionResolvePending
+ * @run main/othervm ConditionalExpressionResolvePending
  */
 
 import combo.ComboInstance;
 import combo.ComboParameter;
 import combo.ComboTask;
 import combo.ComboTestHelper;
+import java.io.InputStream;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.Iterator;
@@ -98,10 +100,7 @@ public class ConditionalExpressionResolvePending extends ComboInstance<Condition
                         case "FALSE" -> False;
                         case "SNIPPET" -> snippet;
                         default -> throw new UnsupportedOperationException(pname);
-                    })
-                .withOption("--enable-preview")
-                .withOption("-source")
-                .withOption(String.valueOf(Runtime.version().feature()));
+                    });
 
         task.generate(result -> {
             try {
@@ -110,7 +109,10 @@ public class ConditionalExpressionResolvePending extends ComboInstance<Condition
                 if (filesIt.hasNext()) {
                     throw new IllegalStateException("More than one classfile returned!");
                 }
-                byte[] data = file.openInputStream().readAllBytes();
+                byte[] data;
+                try (InputStream input = file.openInputStream()) {
+                    data = input.readAllBytes();
+                }
                 ClassLoader inMemoryLoader = new ClassLoader() {
                     protected Class<?> findClass(String name) throws ClassNotFoundException {
                         if ("Test".equals(name)) {

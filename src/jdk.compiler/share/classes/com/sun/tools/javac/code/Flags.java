@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -30,6 +30,7 @@ import java.util.EnumSet;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.stream.Collectors;
 
 import javax.lang.model.element.Modifier;
 
@@ -98,22 +99,19 @@ public class Flags {
     /** Added in SE8, represents constructs implicitly declared in source. */
     public static final int MANDATED     = 1<<15;
 
-    /** Marks a type as a primitive class */
-    public static final int PRIMITIVE_CLASS  = 1<<16;
-
     public static final int StandardFlags = 0x0fff;
 
     // Because the following access flags are overloaded with other
     // bit positions, we translate them when reading and writing class
     // files into unique bits positions: ACC_SYNTHETIC <-> SYNTHETIC,
     // for example.
-    public static final int ACC_SUPER    = 0x0020;
+    public static final int ACC_IDENTITY = 0x0020;
     public static final int ACC_BRIDGE   = 0x0040;
     public static final int ACC_VARARGS  = 0x0080;
-    public static final int ACC_PRIMITIVE = 0x0100;
+    public static final int ACC_STRICT   = 0x0800;
     public static final int ACC_MODULE   = 0x8000;
 
-    /*****************************************
+    /* ***************************************
      * Internal compiler flags (no bits in the lower 16).
      *****************************************/
 
@@ -126,32 +124,28 @@ public class Flags {
      */
     public static final int HASINIT          = 1<<18;
 
-    /** Flag is set for a class symbol if it defines one or more non-empty
-     *  instance initializer block(s). This is relevenat only for class symbols
-     *  that originate from source types. For binary types the instance initializer
-     *  blocks are "normalized" into the constructors.
+    /** Flag is set for a class or interface whose instances have identity
+     * i.e. any concrete class not declared with the modifier `value'
+     * (a) abstract class not declared `value'
+     * (b) older class files with ACC_SUPER bit set
      */
-    public static final int HASINITBLOCK         = 1<<18;
+    public static final int IDENTITY_TYPE            = 1<<19;
 
-    /** Flag is set for a method symbol if it is an empty no-arg ctor.
-     *  i.e one that simply returns (jlO) or merely chains to a super's
-     *  EMPTYNOARGCONSTR
+    /** Class is an implicitly declared top level class.
      */
-    public static final int EMPTYNOARGCONSTR         = 1<<18;
-
-    /**
-     * Flag is set for a reference favoring primitive class.
-     */
-    public static final int REFERENCE_FAVORING          = 1<<19;
+    public static final int IMPLICIT_CLASS    = 1<<23;
 
     /** Flag is set for compiler-generated anonymous method symbols
      *  that `own' an initializer block.
      */
     public static final int BLOCK            = 1<<20;
 
-    /** Flag bit 21 is available. (used earlier to tag compiler-generated abstract methods that implement
-     *  an interface method (Miranda methods)).
+    /** Marks a type as a value class */
+    public static final int VALUE_CLASS      = 1<<20;
+
+    /** Flag is set for ClassSymbols that are being compiled from source.
      */
+    public static final int FROM_SOURCE      = 1<<21; //ClassSymbols
 
     /** Flag is set for nested classes that do not access instance members
      *  or `this' of an outer class and therefore don't need to be passed
@@ -201,7 +195,7 @@ public class Flags {
     public static final int ANONCONSTR   = 1<<29; //non-class members
 
     /**
-     * Flag to indicate the super classes of this ClassSymbol has been attributed.
+     * Flag to indicate the superclasses of this ClassSymbol has been attributed.
      */
     public static final int SUPER_OWNER_ATTRIBUTED = 1<<29; //ClassSymbols
 
@@ -295,15 +289,19 @@ public class Flags {
      */
     public static final long THROWS = 1L<<47;
 
-    /**
-     * Flag that marks potentially ambiguous overloads
+    /*
+     * Currently available: Bit 48.
      */
-    public static final long POTENTIALLY_AMBIGUOUS = 1L<<48;
 
     /**
      * Flag that marks a synthetic method body for a lambda expression
      */
-    public static final long LAMBDA_METHOD = 1L<<49;
+    public static final long LAMBDA_METHOD = 1L<<49; //MethodSymbols only
+
+    /**
+     * Flag that marks a synthetic local capture field in a local/anon class
+     */
+    public static final long LOCAL_CAPTURE_FIELD = 1L<<49; //VarSymbols only
 
     /**
      * Flag to control recursion in TransTypes
@@ -339,6 +337,11 @@ public class Flags {
      * Flag to indicate the given ClassSymbol is a value based.
      */
     public static final long VALUE_BASED = 1L<<53; //ClassSymbols only
+
+    /**
+     * Flag to indicate the given ClassSymbol is a value based.
+     */
+    public static final long MIGRATED_VALUE_CLASS = 1L<<57; //ClassSymbols only
 
     /**
      * Flag to indicate the given symbol has a @Deprecated annotation.
@@ -408,22 +411,46 @@ public class Flags {
     public static final long SEALED = 1L<<62; // ClassSymbols
 
     /**
+     * Flag to indicate restricted method declaration.
+     */
+    public static final long RESTRICTED = 1L<<62; // MethodSymbols
+
+    /**
+     * Flag to indicate type annotations have been queued for field initializers.
+     */
+    public static final long FIELD_INIT_TYPE_ANNOTATIONS_QUEUED = 1L<<53; // VarSymbols
+
+    /**
      * Flag to indicate that the class/interface was declared with the non-sealed modifier.
      */
     public static final long NON_SEALED = 1L<<63; // ClassSymbols
 
-    // Encodings for extended flags stored using attributes
     /**
-     * Flag to indicate that the primitive class is reference default.
+     * Flag to indicate that a class has at least one strict field
      */
-    public static final int ACC_REF_DEFAULT = 1;
+    public static final long HAS_STRICT = 1L<<52; // ClassSymbols, temporary hack
+
+    /**
+     * Flag to indicate that a field is strict
+     */
+    public static final long STRICT = 1L<<53; // VarSymbols
+
+    /**
+     * Describe modifier flags as they might appear in source code, i.e.,
+     * separated by spaces and in the order suggested by JLS 8.1.1.
+     */
+    public static String toSource(long flags) {
+        return asModifierSet(flags).stream()
+          .map(Modifier::toString)
+          .collect(Collectors.joining(" "));
+    }
 
     /** Modifier masks.
      */
     public static final int
         AccessFlags                       = PUBLIC | PROTECTED | PRIVATE,
-        LocalClassFlags                   = FINAL | ABSTRACT | STRICTFP | ENUM | SYNTHETIC  | PRIMITIVE_CLASS,
-        StaticLocalFlags                  = LocalClassFlags | STATIC | INTERFACE,
+        LocalClassFlags                   = FINAL | ABSTRACT | STRICTFP | ENUM | SYNTHETIC | IDENTITY_TYPE,
+        StaticLocalClassFlags             = LocalClassFlags | STATIC | INTERFACE,
         MemberClassFlags                  = LocalClassFlags | INTERFACE | AccessFlags,
         MemberStaticClassFlags            = MemberClassFlags | STATIC,
         ClassFlags                        = LocalClassFlags | INTERFACE | PUBLIC | ANNOTATION,
@@ -437,11 +464,14 @@ public class Flags {
         RecordMethodFlags                 = AccessFlags | ABSTRACT | STATIC |
                                             SYNCHRONIZED | FINAL | STRICTFP;
     public static final long
-        ExtendedStandardFlags             = (long)StandardFlags | DEFAULT | SEALED | NON_SEALED | PRIMITIVE_CLASS,
-        ExtendedMemberClassFlags          = (long)MemberClassFlags | SEALED | NON_SEALED,
-        ExtendedMemberStaticClassFlags    = (long) MemberStaticClassFlags | SEALED | NON_SEALED,
-        ExtendedClassFlags                = (long)ClassFlags | SEALED | NON_SEALED,
-        ModifierFlags                     = ((long)StandardFlags & ~INTERFACE) | DEFAULT | SEALED | NON_SEALED,
+        ExtendedStandardFlags             = (long)StandardFlags | DEFAULT | SEALED | NON_SEALED | VALUE_CLASS,
+        ExtendedMemberClassFlags          = (long)MemberClassFlags | SEALED | NON_SEALED | VALUE_CLASS,
+        ExtendedMemberStaticClassFlags    = (long) MemberStaticClassFlags | SEALED | NON_SEALED | VALUE_CLASS,
+        ExtendedClassFlags                = (long)ClassFlags | SEALED | NON_SEALED | VALUE_CLASS,
+        ExtendedLocalClassFlags           = (long) LocalClassFlags | VALUE_CLASS,
+        ExtendedStaticLocalClassFlags     = (long) StaticLocalClassFlags | VALUE_CLASS,
+        ValueFieldFlags                   = (long) VarFlags | STRICT | FINAL,
+        ModifierFlags                     = ((long)StandardFlags & ~INTERFACE) | DEFAULT | SEALED | NON_SEALED | VALUE_CLASS,
         InterfaceMethodMask               = ABSTRACT | PRIVATE | STATIC | PUBLIC | STRICTFP | DEFAULT,
         AnnotationTypeElementMask         = ABSTRACT | PUBLIC,
         LocalVarFlags                     = FINAL | PARAMETER,
@@ -467,7 +497,7 @@ public class Flags {
             if (0 != (flags & NATIVE))    modifiers.add(Modifier.NATIVE);
             if (0 != (flags & STRICTFP))  modifiers.add(Modifier.STRICTFP);
             if (0 != (flags & DEFAULT))   modifiers.add(Modifier.DEFAULT);
-            if (0 != (flags & PRIMITIVE_CLASS))     modifiers.add(Modifier.PRIMITIVE);
+            if (0 != (flags & VALUE_CLASS))     modifiers.add(Modifier.VALUE);
             modifiers = Collections.unmodifiableSet(modifiers);
             modifierSets.put(flags, modifiers);
         }
@@ -489,7 +519,6 @@ public class Flags {
         return symbol.getConstValue() != null;
     }
 
-
     public enum Flag {
         PUBLIC(Flags.PUBLIC),
         PRIVATE(Flags.PRIVATE),
@@ -509,13 +538,18 @@ public class Flags {
         ANNOTATION(Flags.ANNOTATION),
         DEPRECATED(Flags.DEPRECATED),
         HASINIT(Flags.HASINIT),
-        HASINITBLOCK(Flags.HASINITBLOCK),
-        EMPTYNOARGCONSTR(Flags.EMPTYNOARGCONSTR),
-        REFERENCE_FAVORING(Flags.REFERENCE_FAVORING),
+        IDENTITY_TYPE(Flags.IDENTITY_TYPE) {
+            @Override
+            public String toString() {
+                return "identity";
+            }
+        },
+        VALUE(Flags.VALUE_CLASS),
+        IMPLICIT_CLASS(Flags.IMPLICIT_CLASS),
         BLOCK(Flags.BLOCK),
+        FROM_SOURCE(Flags.FROM_SOURCE),
         ENUM(Flags.ENUM),
         MANDATED(Flags.MANDATED),
-        PRIMITIVE(Flags.PRIMITIVE_CLASS),
         NOOUTERTHIS(Flags.NOOUTERTHIS),
         EXISTS(Flags.EXISTS),
         COMPOUND(Flags.COMPOUND),
@@ -547,7 +581,7 @@ public class Flags {
         DEPRECATED_ANNOTATION(Flags.DEPRECATED_ANNOTATION),
         DEPRECATED_REMOVAL(Flags.DEPRECATED_REMOVAL),
         HAS_RESOURCE(Flags.HAS_RESOURCE),
-        POTENTIALLY_AMBIGUOUS(Flags.POTENTIALLY_AMBIGUOUS),
+        // Bit 48 is currently available
         ANONCONSTR_BASED(Flags.ANONCONSTR_BASED),
         NAME_FILLED(Flags.NAME_FILLED),
         PREVIEW_API(Flags.PREVIEW_API),
@@ -562,7 +596,8 @@ public class Flags {
             public String toString() {
                 return "non-sealed";
             }
-        };
+        },
+        STRICT(Flags.STRICT);
 
         Flag(long flag) {
             this.value = flag;

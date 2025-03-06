@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -23,21 +23,88 @@
 
 package runtime.valhalla.inlinetypes;
 
+import jdk.internal.vm.annotation.ImplicitlyConstructible;
+import jdk.internal.vm.annotation.LooselyConsistentValue;
+import jdk.internal.vm.annotation.NullRestricted;
 import jdk.test.lib.Asserts;
 
 /*
  * @test QuickeningTest
  * @summary Test quickening of getfield and putfield applied to inline fields
  * @library /test/lib
- * @compile -XDallowWithFieldOperator Point.java JumboInline.java QuickeningTest.java
- * @run main runtime.valhalla.inlinetypes.QuickeningTest
+ * @modules java.base/jdk.internal.vm.annotation
+ * @enablePreview
+ * @compile QuickeningTest.java
+ * @run main/othervm runtime.valhalla.inlinetypes.QuickeningTest
  */
 
 public class QuickeningTest {
 
+    @ImplicitlyConstructible
+    @LooselyConsistentValue
+    static value class Point {
+        final int x;
+        final int y;
+
+        public Point(int x, int y) {
+            this.x = x;
+            this.y = y;
+        }
+    }
+
+    @ImplicitlyConstructible
+    @LooselyConsistentValue
+    static value class JumboInline {
+        final long l0;
+        final long l1;
+        final long l2;
+        final long l3;
+        final long l4;
+        final long l5;
+        final long l6;
+        final long l7;
+        final long l8;
+        final long l9;
+        final long l10;
+        final long l11;
+        final long l12;
+        final long l13;
+        final long l14;
+        final long l15;
+        final long l16;
+        final long l17;
+        final long l18;
+        final long l19;
+
+        public JumboInline(long l0Val, long l1Val) {
+            l0 = l0Val;
+            l1 = l1Val;
+            l2 = l0Val+1;
+            l3 = l1Val+2;
+            l4 = l0Val+3;
+            l5 = l1Val+4;
+            l6 = l0Val+5;
+            l7 = l1Val+6;
+            l8 = l0Val+7;
+            l9 = l1Val+8;
+            l10 = l0Val+9;
+            l11 = l1Val+10;
+            l12 = l0Val+11;
+            l13 = l1Val+12;
+            l14 = l0Val+13;
+            l15 = l1Val+14;
+            l16 = l0Val+15;
+            l17 = l1Val+16;
+            l18 = l0Val+17;
+            l19 = l1Val+18;
+        }
+    }
+
     static class Parent {
-    Point.ref nfp;       /* Not flattenable inline field */
+    Point nfp;       /* Not flattenable inline field */
+    @NullRestricted
     Point fp;         /* Flattenable and flattened inline field */
+    @NullRestricted
     JumboInline fj;    /* Flattenable not flattened inline field */
 
         public void setNfp(Point p) { nfp = p; }
@@ -47,8 +114,10 @@ public class QuickeningTest {
 
     static class Child extends Parent {
         // This class inherited fields from the Parent class
-        Point.ref nfp2;      /* Not flattenable inline field */
+        Point nfp2;      /* Not flattenable inline field */
+        @NullRestricted
         Point fp2;        /* Flattenable and flattened inline field */
+        @NullRestricted
         JumboInline fj2;   /* Flattenable not flattened inline field */
 
         public void setNfp2(Point p) { nfp2 = p; }
@@ -56,19 +125,19 @@ public class QuickeningTest {
         public void setFj2(JumboInline j) { fj2 = j; }
     }
 
-    static final primitive class Value {
-        final Point.ref nfp;       /* Not flattenable inline field */
+    @ImplicitlyConstructible
+    @LooselyConsistentValue
+    static value class Value {
+        final Point nfp;       /* Not flattenable inline field */
+        @NullRestricted
         final Point fp;         /* Flattenable and flattened inline field */
+        @NullRestricted
         final JumboInline fj;    /* Flattenable not flattened inline field */
 
         private Value() {
-            nfp = Point.createPoint(0, 0);
-            fp = Point.createPoint(0, 0);
-            fj = JumboInline.createJumboInline();
-        }
-
-        public static Value create() {
-            return Value.default;
+            nfp = null;
+            fp = new Point(0, 0);
+            fj = new JumboInline(0, 0);
         }
     }
 
@@ -92,7 +161,7 @@ public class QuickeningTest {
         Asserts.assertEquals(c.fj2.l0, 0L, "invalid value for uninitialized not flattened field");
         Asserts.assertEquals(c.fj2.l1, 0L, "invalid value for uninitialized not flattened field");
 
-        Value v = Value.create();
+        Value v = new Value();
         Asserts.assertEquals(v.nfp, null, "invalid uninitialized not flattenable");
         Asserts.assertEquals(v.fp.x, 0, "invalid value for uninitialized flattened field");
         Asserts.assertEquals(v.fp.y, 0, "invalid value for uninitialized flattened field");
@@ -101,11 +170,11 @@ public class QuickeningTest {
     }
 
     static void testPutfieldAndGetField() {
-        Point p1 = Point.createPoint(16, 47);
-        Point p2 = Point.createPoint(32, 64);
+        Point p1 = new Point(16, 47);
+        Point p2 = new Point(32, 64);
 
-        JumboInline j1 = JumboInline.createJumboInline().update(4, 5);
-        JumboInline j2 = JumboInline.createJumboInline().update(7, 9);
+        JumboInline j1 = new JumboInline(4, 5);
+        JumboInline j2 = new JumboInline(7, 9);
 
         Parent p = new Parent();
         // executing each setter twice to test quickened bytecodes

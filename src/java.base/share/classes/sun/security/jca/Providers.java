@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2003, 2022, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -23,9 +23,17 @@
  * questions.
  */
 
+/*
+ * ===========================================================================
+ * (c) Copyright IBM Corp. 2024, 2024 All Rights Reserved
+ * ===========================================================================
+ */
+
 package sun.security.jca;
 
 import java.security.Provider;
+
+import openj9.internal.security.RestrictedSecurity;
 import sun.security.x509.AlgorithmId;
 
 /**
@@ -48,13 +56,6 @@ public class Providers {
     // Note volatile immutable object, so no synchronization needed.
     private static volatile ProviderList providerList;
 
-    static {
-        // set providerList to empty list first in case initialization somehow
-        // triggers a getInstance() call (although that should not happen)
-        providerList = ProviderList.EMPTY;
-        providerList = ProviderList.fromSecurityProperties();
-    }
-
     private Providers() {
         // empty
     }
@@ -62,7 +63,7 @@ public class Providers {
     // After the switch to modules, JDK providers are all in modules and JDK
     // no longer needs to load signed jars during start up.
     //
-    // However, for earlier releases, it need special handling to resolve
+    // However, for earlier releases, it needs special handling to resolve
     // circularities when loading signed JAR files during startup. The code
     // below is part of that.
     //
@@ -91,6 +92,28 @@ public class Providers {
         "SunJCE",
     };
 
+    // Hardcoded fully-qualified class names of providers to use for JAR
+    // verification when RestrictedSecurity is enabled (similar to
+    // jarVerificationProviders array).
+    //
+    // MUST NOT be on the bootclasspath and not in signed JAR files.
+    private static final String[] restrictedJarVerificationProviders = {
+        "sun.security.provider.Sun",
+        "sun.security.rsa.SunRsaSign",
+        // Note: when SunEC is in a signed JAR file, it's not signed
+        // by EC algorithms. So it's still safe to be listed here.
+        "sun.security.ec.SunEC",
+        "com.sun.crypto.provider.SunJCE",
+    };
+
+    static {
+        // set providerList to empty list first in case initialization somehow
+        // triggers a getInstance() call (although that should not happen)
+        providerList = ProviderList.EMPTY;
+        providerList = ProviderList.fromSecurityProperties();
+        RestrictedSecurity.checkHashValues();
+    }
+
     // Return Sun provider.
     // This method should only be called by
     // sun.security.util.ManifestEntryVerifier and java.security.SecureRandom.
@@ -101,12 +124,15 @@ public class Providers {
     /**
      * Start JAR verification. This sets a special provider list for
      * the current thread. You MUST save the return value from this
-     * method and you MUST call stopJarVerification() with that object
+     * method, and you MUST call stopJarVerification() with that object
      * once you are done.
      */
     public static Object startJarVerification() {
         ProviderList currentList = getProviderList();
-        ProviderList jarList = currentList.getJarList(jarVerificationProviders);
+        ProviderList jarList = currentList.getJarList(
+                RestrictedSecurity.isEnabled()
+                        ? restrictedJarVerificationProviders
+                        : jarVerificationProviders);
         if (jarList.getProvider("SUN") == null) {
             // add backup provider
             Provider p;
@@ -131,7 +157,7 @@ public class Providers {
 
     /**
      * Return the current ProviderList. If the thread-local list is set,
-     * it is returned. Otherwise, the system wide list is returned.
+     * it is returned. Otherwise, the system-wide list is returned.
      */
     public static ProviderList getProviderList() {
         ProviderList list = getThreadProviderList();
@@ -143,7 +169,7 @@ public class Providers {
 
     /**
      * Set the current ProviderList. Affects the thread-local list if set,
-     * otherwise the system wide list.
+     * otherwise the system-wide list.
      */
     public static void setProviderList(ProviderList newList) {
         if (getThreadProviderList() == null) {

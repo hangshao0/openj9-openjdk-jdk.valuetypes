@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -22,11 +22,16 @@
  */
 package runtime.valhalla.inlinetypes;
 
-public primitive final class Point {
+import jdk.internal.vm.annotation.ImplicitlyConstructible;
+import jdk.internal.vm.annotation.LooselyConsistentValue;
+
+@ImplicitlyConstructible
+@LooselyConsistentValue
+public value class Point {
     final int x;
     final int y;
 
-    private Point(int x, int y) {
+    public Point(int x, int y) {
         this.x = x;
         this.y = y;
     }
@@ -50,7 +55,4 @@ public primitive final class Point {
         }
     }
 
-    public static Point createPoint(int x, int y) {
-        return new Point(x, y);
-    }
 }

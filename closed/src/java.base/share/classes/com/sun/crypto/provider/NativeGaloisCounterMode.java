@@ -24,30 +24,44 @@
  */
 /*
  * ===========================================================================
- * (c) Copyright IBM Corp. 2018, 2021 All Rights Reserved
+ * (c) Copyright IBM Corp. 2018, 2023 All Rights Reserved
  * ===========================================================================
  */
 
 package com.sun.crypto.provider;
 
-import java.util.Arrays;
-import java.io.*;
-import java.security.*;
-import javax.crypto.*;
 import com.sun.crypto.provider.AESCrypt;
-import sun.security.jca.JCAUtil;
-import sun.security.util.ArrayUtil;
 
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.lang.ref.Cleaner;
+import java.nio.ByteBuffer;
+import java.security.AlgorithmParameters;
+import java.security.InvalidAlgorithmParameterException;
+import java.security.InvalidKeyException;
+import java.security.Key;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.security.ProviderException;
+import java.security.SecureRandom;
 import java.security.spec.AlgorithmParameterSpec;
 import java.security.spec.InvalidParameterSpecException;
-import java.nio.ByteBuffer;
-import jdk.crypto.jniprovider.NativeCrypto;
+import java.util.Arrays;
 
-import sun.nio.ch.DirectBuffer;
-import java.lang.invoke.MethodHandles;
-import java.lang.invoke.VarHandle;
-import java.nio.ByteOrder;
+import javax.crypto.AEADBadTagException;
+import javax.crypto.BadPaddingException;
+import javax.crypto.Cipher;
+import javax.crypto.CipherSpi;
+import javax.crypto.NoSuchPaddingException;
+import javax.crypto.ShortBufferException;
+import javax.crypto.IllegalBlockSizeException;
 import javax.crypto.spec.GCMParameterSpec;
+
+import jdk.crypto.jniprovider.NativeCrypto;
+import jdk.internal.ref.CleanerFactory;
+
+import sun.security.jca.JCAUtil;
+import sun.security.util.ArrayUtil;
 
 /**
  * This class represents ciphers in GaloisCounter (GCM) mode.
@@ -68,6 +82,7 @@ abstract class NativeGaloisCounterMode extends CipherSpi {
 
     private byte[] key;
     private boolean encryption = true;
+    private final long context;
 
     private static final int DEFAULT_TAG_LEN = 16; // in bytes
     private static final int DEFAULT_IV_LEN = 12; // in bytes
@@ -87,7 +102,7 @@ abstract class NativeGaloisCounterMode extends CipherSpi {
     SymmetricCipher blockCipher;
 
     // in bytes; need to convert to bits (default value 128) when needed
-    private int tagLenBytes = DEFAULT_TAG_LEN;
+    private int tagLenBytes;
 
     // Key size if the value is passed, in bytes.
     int keySize;
@@ -97,17 +112,49 @@ abstract class NativeGaloisCounterMode extends CipherSpi {
     byte[] lastKey = EMPTY_BUF;
     byte[] lastIv = EMPTY_BUF;
 
+    private boolean newIVLen;
+    private boolean newKeyLen;
+
     byte[] iv;
     SecureRandom random;
 
     private static final NativeCrypto nativeCrypto = NativeCrypto.getNativeCrypto();
+    private static final Cleaner contextCleaner = CleanerFactory.cleaner();
+
+    private static final class GCMCleanerRunnable implements Runnable {
+        private final long nativeContext;
+
+        public GCMCleanerRunnable(long nativeContext) {
+            this.nativeContext = nativeContext;
+        }
+
+        @Override
+        public void run() {
+            /*
+             * Release the GCM context.
+             */
+            synchronized (NativeGaloisCounterMode.class) {
+                long ret = nativeCrypto.DestroyContext(nativeContext);
+                if (ret == -1) {
+                    throw new ProviderException("Error in destroying context in NativeGaloisCounterMode.");
+                }
+            }
+        }
+    }
 
     /*
      * Constructor
      */
     NativeGaloisCounterMode(int keySize, SymmetricCipher embeddedCipher) {
+        tagLenBytes = DEFAULT_TAG_LEN;
         blockCipher = embeddedCipher;
         this.keySize = keySize;
+
+        context = nativeCrypto.CreateContext();
+        if (context == -1) {
+            throw new ProviderException("Error in creating context for NativeGaloisCounterMode.");
+        }
+        contextCleaner.register(this, new GCMCleanerRunnable(context));
     }
 
     /**
@@ -125,37 +172,54 @@ abstract class NativeGaloisCounterMode extends CipherSpi {
                 ("Unsupported TLen value.  Must be one of " +
                     "{128, 120, 112, 104, 96}");
         }
-        tagLenBytes = tagLen >> 3;
 
-        // Check the Key object is valid and the right size
-        if (key == null) {
-            throw new InvalidKeyException("The key must not be null");
-        }
-        byte[] keyValue = key.getEncoded();
-        if (keyValue == null) {
-            throw new InvalidKeyException("Key encoding must not be null");
-        } else if ((keySize != -1) && (keyValue.length != keySize)) {
-            Arrays.fill(keyValue, (byte) 0);
-            throw new InvalidKeyException("The key must be " +
-                keySize + " bytes");
-        }
-        this.key = keyValue.clone();
+        byte[] keyValue;
+        synchronized (this) {
+            tagLenBytes = tagLen >> 3;
 
-        // Check for reuse
-        if (encryption) {
-            if (MessageDigest.isEqual(keyValue, lastKey) &&
-                MessageDigest.isEqual(iv, lastIv)) {
+            // Check the Key object is valid and the right size
+            if (key == null) {
+                throw new InvalidKeyException("The key must not be null");
+            }
+            keyValue = key.getEncoded();
+            if (keyValue == null) {
+                throw new InvalidKeyException("Key encoding must not be null");
+            } else if ((keySize != -1) && (keyValue.length != keySize)) {
                 Arrays.fill(keyValue, (byte) 0);
-                throw new InvalidAlgorithmParameterException(
-                    "Cannot reuse iv for GCM encryption");
+                throw new InvalidKeyException("The key must be " +
+                    keySize + " bytes");
+            }
+            this.key = keyValue.clone();
+
+            /*
+             * Check whether cipher and IV need to be set,
+             * whether because something changed here or
+             * a call to set them in context hasn't been
+             * made yet.
+             */
+            if (lastIv.length != this.iv.length) {
+                newIVLen = true;
+            }
+            if (lastKey.length != this.key.length) {
+                newKeyLen = true;
             }
 
-            // Both values are already clones
-            if (lastKey != null) {
-                Arrays.fill(lastKey, (byte) 0);
+            // Check for reuse
+            if (encryption) {
+                if (MessageDigest.isEqual(keyValue, lastKey) &&
+                    MessageDigest.isEqual(iv, lastIv)) {
+                    Arrays.fill(keyValue, (byte) 0);
+                    throw new InvalidAlgorithmParameterException(
+                        "Cannot reuse iv for GCM encryption");
+                }
+
+                // Both values are already clones
+                if (lastKey != null) {
+                    Arrays.fill(lastKey, (byte) 0);
+                }
+                lastKey = keyValue;
+                lastIv = iv;
             }
-            lastKey = keyValue;
-            lastIv = iv;
         }
         reInit = false;
 
@@ -217,7 +281,7 @@ abstract class NativeGaloisCounterMode extends CipherSpi {
     }
 
     @Override
-    protected byte[] engineGetIV() {
+    protected synchronized byte[] engineGetIV() {
         if (iv == null) {
             return null;
         }
@@ -243,8 +307,11 @@ abstract class NativeGaloisCounterMode extends CipherSpi {
 
     @Override
     protected AlgorithmParameters engineGetParameters() {
-        GCMParameterSpec spec = new GCMParameterSpec(tagLenBytes * 8,
-            (iv == null) ? createIv(random) : iv.clone());
+        GCMParameterSpec spec;
+        synchronized (this) {
+            spec = new GCMParameterSpec(tagLenBytes * 8,
+                (iv == null) ? createIv(random) : iv.clone());
+        }
         try {
             AlgorithmParameters params =
                 AlgorithmParameters.getInstance("GCM",
@@ -277,21 +344,23 @@ abstract class NativeGaloisCounterMode extends CipherSpi {
         GCMParameterSpec spec;
         this.random = random;
         engine = null;
-        if (params == null) {
-            iv = createIv(random);
-            spec = new GCMParameterSpec(DEFAULT_TAG_LEN * 8, iv);
-        } else {
-            if (!(params instanceof GCMParameterSpec)) {
-                throw new InvalidAlgorithmParameterException(
-                    "AlgorithmParameterSpec not of GCMParameterSpec");
-            }
-            spec = (GCMParameterSpec)params;
-            iv = spec.getIV();
-            if (iv == null) {
-                throw new InvalidAlgorithmParameterException("IV is null");
-            }
-            if (iv.length == 0) {
-                throw new InvalidAlgorithmParameterException("IV is empty");
+        synchronized (this) {
+            if (params == null) {
+                iv = createIv(random);
+                spec = new GCMParameterSpec(DEFAULT_TAG_LEN * 8, iv);
+            } else {
+                if (!(params instanceof GCMParameterSpec)) {
+                    throw new InvalidAlgorithmParameterException(
+                        "AlgorithmParameterSpec not of GCMParameterSpec");
+                }
+                spec = (GCMParameterSpec)params;
+                iv = spec.getIV();
+                if (iv == null) {
+                    throw new InvalidAlgorithmParameterException("IV is null");
+                }
+                if (iv.length == 0) {
+                    throw new InvalidAlgorithmParameterException("IV is empty");
+                }
             }
         }
         init(opmode, key, spec);
@@ -544,14 +613,14 @@ abstract class NativeGaloisCounterMode extends CipherSpi {
             ShortBufferException;
 
         // Initialize internal data buffer, if not already.
-        void initBuffer(int len) {
+        synchronized void initBuffer(int len) {
             if (ibuffer == null) {
                 ibuffer = new ByteArrayOutputStream(len);
             }
         }
 
         // Helper method for getting ibuffer size
-        int getBufferedLength() {
+        synchronized int getBufferedLength() {
             return (ibuffer == null) ? 0 : ibuffer.size();
         }
 
@@ -604,12 +673,14 @@ abstract class NativeGaloisCounterMode extends CipherSpi {
             if (encryption) {
                 checkReInit();
             }
-            if (aadBuffer != null) {
-                aadBuffer.write(src, offset, len);
-            } else {
-                // update has already been called
-                throw new IllegalStateException
-                    ("Update has been called; no more AAD data");
+            synchronized (this) {
+                if (aadBuffer != null) {
+                    aadBuffer.write(src, offset, len);
+                } else {
+                    // update has already been called
+                    throw new IllegalStateException
+                        ("Update has been called; no more AAD data");
+                }
             }
         }
     }
@@ -627,7 +698,9 @@ abstract class NativeGaloisCounterMode extends CipherSpi {
         public int getOutputSize(int inLen, boolean isFinal) {
             int len = getBufferedLength();
             if (isFinal) {
-                return len + inLen + tagLenBytes;
+                synchronized (this) {
+                    return len + inLen + tagLenBytes;
+                }
             } else {
                 len += inLen;
                 return len - (len % blockCipher.getBlockSize());
@@ -676,7 +749,9 @@ abstract class NativeGaloisCounterMode extends CipherSpi {
                 // spec mentioned that only return recovered data after tag
                 // is successfully verified
                 initBuffer(inLen);
-                ibuffer.write(in, inOfs, inLen);
+                synchronized (this) {
+                    ibuffer.write(in, inOfs, inLen);
+                }
             }
             return 0;
         }
@@ -695,10 +770,12 @@ abstract class NativeGaloisCounterMode extends CipherSpi {
                 byte[] b = new byte[src.remaining()];
                 src.get(b);
                 // remainder offset is based on original buffer length
-                try {
-                    ibuffer.write(b);
-                } catch (IOException e) {
-                    throw new RuntimeException(e);
+                synchronized (this) {
+                    try {
+                        ibuffer.write(b);
+                    } catch (IOException e) {
+                        throw new RuntimeException(e);
+                    }
                 }
             }
             return 0;
@@ -718,42 +795,57 @@ abstract class NativeGaloisCounterMode extends CipherSpi {
         public int doFinal(byte[] in, int inOfs, int inLen, byte[] out,
             int outOfs) throws IllegalBlockSizeException, ShortBufferException {
             checkReInit();
-            if (inLen > (MAX_BUF_SIZE - tagLenBytes)) {
-                throw new ShortBufferException
-                    ("Can't fit both data and tag into one buffer");
+            int localTagLenBytes;
+            int ret;
+
+            synchronized (this) {
+                localTagLenBytes = tagLenBytes;
+
+                if (inLen > (MAX_BUF_SIZE - localTagLenBytes)) {
+                    throw new ShortBufferException
+                        ("Can't fit both data and tag into one buffer");
+                }
+
+                if ((out.length - outOfs) < (inLen + localTagLenBytes)) {
+                    throw new ShortBufferException("Output buffer too small");
+                }
+
+                int bLen = getBufferedLength();
+                checkDataLength(bLen, inLen);
+                initBuffer(inLen);
+
+                if (inLen > 0) {
+                    ibuffer.write(in, inOfs, inLen);
+                }
+
+                // refresh 'in' to all buffered-up bytes
+                in = ibuffer.toByteArray();
+                inOfs = 0;
+                inLen = in.length;
+                ibuffer.reset();
+                byte[] aad = ((aadBuffer == null) || (aadBuffer.size() == 0)) ? EMPTY_BUF : aadBuffer.toByteArray();
+                aadBuffer = null;
+
+                ret = nativeCrypto.GCMEncrypt(context,
+                        key, key.length,
+                        iv, iv.length,
+                        in, inOfs, inLen,
+                        out, outOfs,
+                        aad, aad.length,
+                        localTagLenBytes,
+                        newIVLen,
+                        newKeyLen);
             }
-
-            if ((out.length - outOfs) < (inLen + tagLenBytes)) {
-                throw new ShortBufferException("Output buffer too small");
-            }
-
-            int bLen = getBufferedLength();
-            checkDataLength(bLen, inLen);
-            initBuffer(inLen);
-
-            if (inLen > 0) {
-                ibuffer.write(in, inOfs, inLen);
-            }
-
-            // refresh 'in' to all buffered-up bytes
-            in = ibuffer.toByteArray();
-            inOfs = 0;
-            inLen = in.length;
-            ibuffer.reset();
-            byte[] aad = ((aadBuffer == null) || (aadBuffer.size() == 0)) ? EMPTY_BUF : aadBuffer.toByteArray();
-            aadBuffer = null;
-
-            int ret = nativeCrypto.GCMEncrypt(key, key.length,
-                    iv, iv.length,
-                    in, inOfs, inLen,
-                    out, outOfs,
-                    aad, aad.length, tagLenBytes);
             if (ret == -1) {
                 throw new ProviderException("Error in Native GaloisCounterMode");
             }
 
+            /* Cipher and IV length were set, since call to GCMEncrypt succeeded. */
+            newKeyLen = false;
+            newIVLen = false;
+
             reInit = true;
-            return inLen + tagLenBytes;
+            return inLen + localTagLenBytes;
         }
 
         /**
@@ -812,7 +904,9 @@ abstract class NativeGaloisCounterMode extends CipherSpi {
             if (!isFinal) {
                 return 0;
             }
-            return Math.max(inLen + getBufferedLength() - tagLenBytes, 0);
+            synchronized (this) {
+                return Math.max(inLen + getBufferedLength() - tagLenBytes, 0);
+            }
         }
 
         // Put the input data into the ibuffer
@@ -853,7 +947,9 @@ abstract class NativeGaloisCounterMode extends CipherSpi {
                 // spec mentioned that only return recovered data after tag
                 // is successfully verified
                 initBuffer(inLen);
-                ibuffer.write(in, inOfs, inLen);
+                synchronized (this) {
+                    ibuffer.write(in, inOfs, inLen);
+                }
             }
             return 0;
         }
@@ -871,10 +967,12 @@ abstract class NativeGaloisCounterMode extends CipherSpi {
                 byte[] b = new byte[src.remaining()];
                 src.get(b);
                 // remainder offset is based on original buffer length
-                try {
-                    ibuffer.write(b);
-                } catch (IOException e) {
-                    throw new RuntimeException(e);
+                synchronized (this) {
+                    try {
+                        ibuffer.write(b);
+                    } catch (IOException e) {
+                        throw new RuntimeException(e);
+                    }
                 }
             }
             return 0;
@@ -903,39 +1001,52 @@ abstract class NativeGaloisCounterMode extends CipherSpi {
             if (inLen < 0) {
                 throw new ProviderException("Input length is negative");
             }
-            int bLen = getBufferedLength();
-            if (inLen < (tagLenBytes - bLen)) {
-                throw new AEADBadTagException("Input too short - need tag");
+            int ret;
+            synchronized (this) {
+                int bLen = getBufferedLength();
+                if (inLen < (tagLenBytes - bLen)) {
+                    throw new AEADBadTagException("Input too short - need tag");
+                }
+                if (inLen > (MAX_BUF_SIZE - bLen)) {
+                    throw new ProviderException("SunJCE provider only supports "
+                        + "a positive input size up to " + MAX_BUF_SIZE + " bytes");
+                }
+                if ((out.length - outOfs) < (inLen + bLen - tagLenBytes)) {
+                    throw new ShortBufferException("Output buffer too small");
+                }
+                byte[] aad = ((aadBuffer == null) || (aadBuffer.size() == 0)) ?
+                    EMPTY_BUF : aadBuffer.toByteArray();
+                aadBuffer = null;
+                initBuffer(inLen);
+                if (inLen > 0) {
+                    ibuffer.write(in, inOfs, inLen);
+                }
+                // refresh 'in' to all buffered-up bytes
+                in = ibuffer.toByteArray();
+                inOfs = 0;
+                inLen = in.length;
+                ibuffer.reset();
+
+                ret = nativeCrypto.GCMDecrypt(context,
+                        key, key.length,
+                        iv, iv.length,
+                        in, inOfs, inLen,
+                        out, outOfs,
+                        aad, aad.length,
+                        tagLenBytes,
+                        newIVLen,
+                        newKeyLen);
             }
-            if (inLen > (MAX_BUF_SIZE - bLen)) {
-                throw new ProviderException("SunJCE provider only supports "
-                    + "a positive input size up to " + MAX_BUF_SIZE + " bytes");
-            }
-            if ((out.length - outOfs) < (inLen + bLen - tagLenBytes)) {
-                throw new ShortBufferException("Output buffer too small");
-            }
-            byte[] aad = ((aadBuffer == null) || (aadBuffer.size() == 0)) ?
-                EMPTY_BUF : aadBuffer.toByteArray();
-            aadBuffer = null;
-            initBuffer(inLen);
-            if (inLen > 0) {
-                ibuffer.write(in, inOfs, inLen);
-            }
-            // refresh 'in' to all buffered-up bytes
-            in = ibuffer.toByteArray();
-            inOfs = 0;
-            inLen = in.length;
-            ibuffer.reset();
-            int ret = nativeCrypto.GCMDecrypt(key, key.length,
-                    iv, iv.length,
-                    in, inOfs, inLen,
-                    out, outOfs,
-                    aad, aad.length, tagLenBytes);
             if (ret == -2) {
                 throw new AEADBadTagException("Tag mismatch!");
             } else if (ret == -1) {
                 throw new ProviderException("Error in Native GaloisCounterMode");
             }
+
+            /* Cipher and IV length were set, since call to GCMDecrypt succeeded. */
+            newKeyLen = false;
+            newIVLen = false;
+
             return ret;
         }
 

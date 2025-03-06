@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -27,23 +27,23 @@ import java.lang.management.MemoryPoolMXBean;
 import java.lang.reflect.Method;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
-import jdk.jfr.Recording;
+import jdk.jfr.Event;
+import jdk.jfr.consumer.RecordingStream;
 import jdk.jfr.consumer.RecordedEvent;
 import jdk.test.lib.Asserts;
 import jdk.test.lib.jfr.EventNames;
 import jdk.test.lib.jfr.Events;
-import sun.hotspot.WhiteBox;
-import sun.hotspot.code.BlobType;
-import sun.hotspot.code.CodeBlob;
+import jdk.test.whitebox.WhiteBox;
+import jdk.test.whitebox.code.BlobType;
+import jdk.test.whitebox.code.CodeBlob;
 
 /**
- * Test for events: vm/code_sweeper/sweep vm/code_cache/full vm/compiler/failure
+ * Test for events: jdk.CodeCacheFull jdk.CompilationFailure
  *
- * We verify: 1. That sweptCount >= flushedCount + zombifiedCount 2. That
- * sweepIndex increases by 1. 3. We should get at least one of each of the
- * events listed above.
+ * We verify that we should get at least one of each of the events listed above.
  *
  * NOTE! The test is usually able to trigger the events but not always. If an
  * event is received, the event is verified. If an event is missing, we do NOT
@@ -51,23 +51,24 @@ import sun.hotspot.code.CodeBlob;
  */
 /**
  * @test TestCodeSweeper
- * @key jfr
+ * @requires vm.flagless
  * @requires vm.hasJFR
  * @library /test/lib
- * @build sun.hotspot.WhiteBox
- * @run driver jdk.test.lib.helpers.ClassFileInstaller sun.hotspot.WhiteBox
+ * @build jdk.test.whitebox.WhiteBox
+ * @run driver jdk.test.lib.helpers.ClassFileInstaller jdk.test.whitebox.WhiteBox
  * @run main/othervm -Xbootclasspath/a:. -XX:+UnlockDiagnosticVMOptions -XX:-SegmentedCodeCache -XX:+WhiteBoxAPI jdk.jfr.event.compiler.TestCodeSweeper
  */
 
 public class TestCodeSweeper {
+    static class ProvocationEvent extends Event {
+    }
     private static final WhiteBox WHITE_BOX = WhiteBox.getWhiteBox();
     private static final int COMP_LEVEL_SIMPLE = 1;
     private static final int COMP_LEVEL_FULL_OPTIMIZATION = 4;
     private static final int SIZE = 1;
     private static final String METHOD_NAME = "verifyFullEvent";
-    private static final String pathSweep = EventNames.SweepCodeCache;
-    private static final String pathFull = EventNames.CodeCacheFull;
-    private static final String pathFailure = EventNames.CompilationFailure;
+    private static final String EVENT_CODE_CACHE_FULL = EventNames.CodeCacheFull;
+    private static final String EVENT_COMPILATION_FAILURE = EventNames.CompilationFailure;
     public static final long SEGMENT_SIZE = WhiteBox.getWhiteBox().getUintxVMFlag("CodeCacheSegmentSize");
     public static final long MIN_BLOCK_LENGTH = WhiteBox.getWhiteBox().getUintxVMFlag("CodeCacheMinBlockLength");
     public static final long MIN_ALLOCATION = SEGMENT_SIZE * MIN_BLOCK_LENGTH;
@@ -80,39 +81,48 @@ public class TestCodeSweeper {
         System.out.println("This test will warn that the code cache is full.");
         System.out.println("That is expected and is the purpose of the test.");
         System.out.println("************************************************");
+        List<RecordedEvent> events = Collections.synchronizedList(new ArrayList<>());
+        try (RecordingStream rs = new RecordingStream()) {
+            rs.setReuse(false);
+            rs.enable(EVENT_CODE_CACHE_FULL);
+            rs.enable(EVENT_COMPILATION_FAILURE);
+            rs.onEvent(EVENT_CODE_CACHE_FULL, events::add);
+            rs.onEvent(EVENT_COMPILATION_FAILURE, events::add);
+            rs.onEvent(ProvocationEvent.class.getName(), e -> {
+                if (!events.isEmpty()) {
+                    rs.close();
+                    return;
+                }
+                // Retry if CodeCacheFull or CompilationFailure events weren't provoked
+                try {
+                    provokeEvents();
+                } catch (Exception ex) {
+                    ex.printStackTrace();
+                    rs.close();
+                }
+            });
+            rs.startAsync();
+            provokeEvents();
+            rs.awaitTermination();
+        }
 
-        Recording r = new Recording();
-        r.enable(pathSweep);
-        r.enable(pathFull);
-        r.enable(pathFailure);
-        r.start();
-        provokeEvents();
-        r.stop();
-
-        int countEventSweep = 0;
         int countEventFull = 0;
         int countEventFailure = 0;
-
-        List<RecordedEvent> events = Events.fromRecording(r);
         Events.hasEvents(events);
-        for (RecordedEvent event : events) {
+        for (RecordedEvent event : new ArrayList<>(events)) {
             switch (event.getEventType().getName()) {
-            case pathSweep:
-                countEventSweep++;
-                verifySingleSweepEvent(event);
-                break;
-            case pathFull:
+            case EVENT_CODE_CACHE_FULL:
                 countEventFull++;
                 verifyFullEvent(event);
                 break;
-            case pathFailure:
+            case EVENT_COMPILATION_FAILURE:
                 countEventFailure++;
                 verifyFailureEvent(event);
                 break;
             }
         }
 
-        System.out.println(String.format("eventCount: %d, %d, %d", countEventSweep, countEventFull, countEventFailure));
+        System.out.println(String.format("eventCount: %d, %d", countEventFull, countEventFailure));
     }
 
     private static boolean canAllocate(double size, long maxSize, MemoryPoolMXBean bean) {
@@ -124,6 +134,8 @@ public class TestCodeSweeper {
     }
 
     private static void provokeEvents() throws NoSuchMethodException, InterruptedException {
+        System.out.println("provokeEvents()");
+        ProvocationEvent provocationEvent = new ProvocationEvent();
         // Prepare for later, since we don't want to trigger any compilation
         // setting this up.
         Method method = TestCodeSweeper.class.getDeclaredMethod(METHOD_NAME, new Class[] { RecordedEvent.class });
@@ -131,7 +143,6 @@ public class TestCodeSweeper {
                 + "." + METHOD_NAME + "\", " + "BackgroundCompilation: false }]";
 
         // Fill up code heaps until they are almost full
-        // to trigger the vm/code_sweeper/sweep event.
         ArrayList<Long> blobs = new ArrayList<>();
         MemoryPoolMXBean bean = BlobType.All.getMemoryPool();
         long max = bean.getUsage().getMax();
@@ -169,6 +180,7 @@ public class TestCodeSweeper {
         for (Long blob : blobs) {
             WHITE_BOX.freeCodeBlob(blob);
         }
+        provocationEvent.commit();
     }
 
     private static void verifyFullEvent(RecordedEvent event) throws Throwable {
@@ -193,15 +205,6 @@ public class TestCodeSweeper {
     private static void verifyFailureEvent(RecordedEvent event) throws Throwable {
         Events.assertField(event, "failureMessage").notEmpty();
         Events.assertField(event, "compileId").atLeast(0);
-    }
-
-    private static void verifySingleSweepEvent(RecordedEvent event) throws Throwable {
-        int flushedCount = Events.assertField(event, "flushedCount").atLeast(0).getValue();
-        int zombifiedCount = Events.assertField(event, "zombifiedCount").atLeast(0).getValue();
-        Events.assertField(event, "sweptCount").atLeast(flushedCount + zombifiedCount);
-        Events.assertField(event, "sweepId").atLeast(0);
-        Asserts.assertGreaterThanOrEqual(event.getStartTime(), Instant.EPOCH, "startTime was < 0");
-        Asserts.assertGreaterThanOrEqual(event.getEndTime(), event.getStartTime(), "startTime was > endTime");
     }
 
     /** Returns true if less <= bigger. */

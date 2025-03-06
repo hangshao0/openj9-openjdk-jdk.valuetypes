@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2019, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -114,11 +114,18 @@ import java.util.Objects;
  * more detail, or when communicating to a database or in a network protocol.
  * <p>
  * This is a <a href="{@docRoot}/java.base/java/lang/doc-files/ValueBased.html">value-based</a>
- * class; programmers should treat instances that are
- * {@linkplain #equals(Object) equal} as interchangeable and should not
- * use instances for synchronization, or unpredictable behavior may
- * occur. For example, in a future release, synchronization may fail.
- * The {@code equals} method should be used for comparisons.
+ * class; programmers should treat instances that are {@linkplain #equals(Object) equal}
+ * as interchangeable and should not use instances for synchronization, mutexes, or
+ * with {@linkplain java.lang.ref.Reference object references}.
+ *
+ * <div class="preview-block">
+ *      <div class="preview-comment">
+ *          When preview features are enabled, {@code OffsetDateTime} is a {@linkplain Class#isValue value class}.
+ *          Use of value class instances for synchronization, mutexes, or with
+ *          {@linkplain java.lang.ref.Reference object references} result in
+ *          {@link IdentityException}.
+ *      </div>
+ * </div>
  *
  * @implSpec
  * This class is immutable and thread-safe.
@@ -126,6 +133,7 @@ import java.util.Objects;
  * @since 1.8
  */
 @jdk.internal.ValueBased
+@jdk.internal.MigratedValueClass
 public final class OffsetDateTime
         implements Temporal, TemporalAdjuster, Comparable<OffsetDateTime>, Serializable {
 
@@ -169,7 +177,8 @@ public final class OffsetDateTime
      *
      * @param datetime1  the first date-time to compare, not null
      * @param datetime2  the other date-time to compare to, not null
-     * @return the comparator value, negative if less, positive if greater
+     * @return the comparator value, that is less than zero if {@code datetime1} is before {@code datetime2},
+     *          zero if they are equal, greater than zero if {@code datetime1} is after {@code datetime2}
      */
     private static int compareInstant(OffsetDateTime datetime1, OffsetDateTime datetime2) {
         if (datetime1.getOffset().equals(datetime2.getOffset())) {
@@ -189,11 +198,11 @@ public final class OffsetDateTime
     private static final long serialVersionUID = 2287754244819255394L;
 
     /**
-     * The local date-time.
+     * @serial The local date-time.
      */
     private final LocalDateTime dateTime;
     /**
-     * The offset from UTC/Greenwich.
+     * @serial The offset from UTC/Greenwich.
      */
     private final ZoneOffset offset;
 
@@ -1801,11 +1810,20 @@ public final class OffsetDateTime
      * consistent with {@code equals()}.
      *
      * @param other  the other date-time to compare to, not null
-     * @return the comparator value, negative if less, positive if greater
+     * @return the comparator value, that is the comparison with the {@code other}'s instant, if they are not equal;
+     *          and if equal to the {@code other}'s instant, the comparison of the {@code other}'s local date-time
+     * @see #isBefore
+     * @see #isAfter
      */
     @Override
     public int compareTo(OffsetDateTime other) {
-        int cmp = compareInstant(this, other);
+        int cmp = getOffset().compareTo(other.getOffset());
+        if (cmp != 0) {
+            cmp = Long.compare(toEpochSecond(), other.toEpochSecond());
+            if (cmp == 0) {
+                cmp = toLocalTime().getNano() - other.toLocalTime().getNano();
+            }
+        }
         if (cmp == 0) {
             cmp = toLocalDateTime().compareTo(other.toLocalDateTime());
         }
@@ -1897,7 +1915,7 @@ public final class OffsetDateTime
     /**
      * Outputs this date-time as a {@code String}, such as {@code 2007-12-03T10:15:30+01:00}.
      * <p>
-     * The output will be one of the following ISO-8601 formats:
+     * The output will be one of the following formats:
      * <ul>
      * <li>{@code uuuu-MM-dd'T'HH:mmXXXXX}</li>
      * <li>{@code uuuu-MM-dd'T'HH:mm:ssXXXXX}</li>
@@ -1906,13 +1924,17 @@ public final class OffsetDateTime
      * <li>{@code uuuu-MM-dd'T'HH:mm:ss.SSSSSSSSSXXXXX}</li>
      * </ul>
      * The format used will be the shortest that outputs the full value of
-     * the time where the omitted parts are implied to be zero.
+     * the time where the omitted parts are implied to be zero. The output
+     * is compatible with ISO 8601 if the seconds in the offset are zero.
      *
      * @return a string representation of this date-time, not null
      */
     @Override
     public String toString() {
-        return dateTime.toString() + offset.toString();
+        var offsetStr = offset.toString();
+        var buf = new StringBuilder(29 + offsetStr.length());
+        dateTime.formatTo(buf);
+        return buf.append(offsetStr).toString();
     }
 
     //-----------------------------------------------------------------------

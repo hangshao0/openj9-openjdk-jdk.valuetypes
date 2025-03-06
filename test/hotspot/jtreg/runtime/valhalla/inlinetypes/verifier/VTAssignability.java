@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,22 +24,25 @@
 /*
  * @test
  * @summary Test basic verifier assignability of inline types.
- * @compile -XDallowWithFieldOperator VTAssignability.java
+ * @enablePreview
+ * @compile VTAssignability.java
  * @run main/othervm -Xverify:remote VTAssignability
  */
 
 // Test that an inline type is assignable to itself, to java.lang.Object,
-// and to an interface,
+// to an abstract super type and to an interface,
 //
 interface II { }
 
-public primitive final class VTAssignability implements II {
+abstract value class AbstractValue { }
+
+public value  class VTAssignability extends AbstractValue implements II {
     final int x;
     final int y;
 
-    private VTAssignability() {
-        x = 0;
-        y = 0;
+    public VTAssignability(int x, int y) {
+        this.x = x;
+        this.y = y;
     }
 
     public int getX() { return x; }
@@ -57,26 +60,26 @@ public primitive final class VTAssignability implements II {
         }
     }
 
-    public void takesInterface(II i) {
-        System.out.println("Test passes!!");
+    public void takesAbstractSuper(AbstractValue val) {
+        System.out.println("Test passes for abstract super");
     }
 
-    public static VTAssignability createVTAssignability(int x, int y) {
-        VTAssignability p = VTAssignability.default;
-        p = __WithField(p.x, x);
-        p = __WithField(p.y, y);
-        return p;
+    public void takesInterface(II i) {
+        System.out.println("Test passes for interfaces");
     }
 
     public static void main(String[] args) {
-        VTAssignability a = createVTAssignability(3, 4);
-        VTAssignability b = createVTAssignability(2, 4);
+        VTAssignability a = new VTAssignability(3, 4);
+        VTAssignability b = new VTAssignability(2, 4);
 
         // Test assignability of an inline type to itself.
         boolean res = a.isSameVTAssignability(b);
 
         // Test assignability of an inline type to java.lang.Object.
         res = b.equals(a);
+
+        // Test assignability of an inline type to an abstract super type.
+        a.takesAbstractSuper(b);
 
         // Test assignability of an inline type to an interface.
         a.takesInterface(b);

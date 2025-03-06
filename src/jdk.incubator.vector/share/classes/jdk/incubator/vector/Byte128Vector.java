@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,7 +24,7 @@
  */
 package jdk.incubator.vector;
 
-import java.nio.ByteBuffer;
+import java.lang.foreign.MemorySegment;
 import java.util.Arrays;
 import java.util.Objects;
 import java.util.function.IntUnaryOperator;
@@ -141,24 +141,15 @@ final class Byte128Vector extends ByteVector {
     @ForceInline
     Byte128Shuffle iotaShuffle() { return Byte128Shuffle.IOTA; }
 
+    @Override
     @ForceInline
     Byte128Shuffle iotaShuffle(int start, int step, boolean wrap) {
-      if (wrap) {
-        return (Byte128Shuffle)VectorSupport.shuffleIota(ETYPE, Byte128Shuffle.class, VSPECIES, VLENGTH, start, step, 1,
-                (l, lstart, lstep, s) -> s.shuffleFromOp(i -> (VectorIntrinsics.wrapToRange(i*lstep + lstart, l))));
-      } else {
-        return (Byte128Shuffle)VectorSupport.shuffleIota(ETYPE, Byte128Shuffle.class, VSPECIES, VLENGTH, start, step, 0,
-                (l, lstart, lstep, s) -> s.shuffleFromOp(i -> (i*lstep + lstart)));
-      }
+        return (Byte128Shuffle) iotaShuffleTemplate((byte) start, (byte) step, wrap);
     }
 
     @Override
     @ForceInline
-    Byte128Shuffle shuffleFromBytes(byte[] reorder) { return new Byte128Shuffle(reorder); }
-
-    @Override
-    @ForceInline
-    Byte128Shuffle shuffleFromArray(int[] indexes, int i) { return new Byte128Shuffle(indexes, i); }
+    Byte128Shuffle shuffleFromArray(int[] indices, int i) { return new Byte128Shuffle(indices, i); }
 
     @Override
     @ForceInline
@@ -236,8 +227,8 @@ final class Byte128Vector extends ByteVector {
 
     @ForceInline
     final @Override
-    byte rOp(byte v, FBinOp f) {
-        return super.rOpTemplate(v, f);  // specialize
+    byte rOp(byte v, VectorMask<Byte> m, FBinOp f) {
+        return super.rOpTemplate(v, m, f);  // specialize
     }
 
     @Override
@@ -275,8 +266,20 @@ final class Byte128Vector extends ByteVector {
 
     @Override
     @ForceInline
+    public Byte128Vector lanewise(Unary op, VectorMask<Byte> m) {
+        return (Byte128Vector) super.lanewiseTemplate(op, Byte128Mask.class, (Byte128Mask) m);  // specialize
+    }
+
+    @Override
+    @ForceInline
     public Byte128Vector lanewise(Binary op, Vector<Byte> v) {
         return (Byte128Vector) super.lanewiseTemplate(op, v);  // specialize
+    }
+
+    @Override
+    @ForceInline
+    public Byte128Vector lanewise(Binary op, Vector<Byte> v, VectorMask<Byte> m) {
+        return (Byte128Vector) super.lanewiseTemplate(op, Byte128Mask.class, v, (Byte128Mask) m);  // specialize
     }
 
     /*package-private*/
@@ -288,11 +291,26 @@ final class Byte128Vector extends ByteVector {
 
     /*package-private*/
     @Override
+    @ForceInline Byte128Vector
+    lanewiseShift(VectorOperators.Binary op, int e, VectorMask<Byte> m) {
+        return (Byte128Vector) super.lanewiseShiftTemplate(op, Byte128Mask.class, e, (Byte128Mask) m);  // specialize
+    }
+
+    /*package-private*/
+    @Override
     @ForceInline
     public final
     Byte128Vector
-    lanewise(VectorOperators.Ternary op, Vector<Byte> v1, Vector<Byte> v2) {
+    lanewise(Ternary op, Vector<Byte> v1, Vector<Byte> v2) {
         return (Byte128Vector) super.lanewiseTemplate(op, v1, v2);  // specialize
+    }
+
+    @Override
+    @ForceInline
+    public final
+    Byte128Vector
+    lanewise(Ternary op, Vector<Byte> v1, Vector<Byte> v2, VectorMask<Byte> m) {
+        return (Byte128Vector) super.lanewiseTemplate(op, Byte128Mask.class, v1, v2, (Byte128Mask) m);  // specialize
     }
 
     @Override
@@ -314,7 +332,7 @@ final class Byte128Vector extends ByteVector {
     @ForceInline
     public final byte reduceLanes(VectorOperators.Associative op,
                                     VectorMask<Byte> m) {
-        return super.reduceLanesTemplate(op, m);  // specialized
+        return super.reduceLanesTemplate(op, Byte128Mask.class, (Byte128Mask) m);  // specialized
     }
 
     @Override
@@ -327,12 +345,19 @@ final class Byte128Vector extends ByteVector {
     @ForceInline
     public final long reduceLanesToLong(VectorOperators.Associative op,
                                         VectorMask<Byte> m) {
-        return (long) super.reduceLanesTemplate(op, m);  // specialized
+        return (long) super.reduceLanesTemplate(op, Byte128Mask.class, (Byte128Mask) m);  // specialized
     }
 
+    @Override
     @ForceInline
-    public VectorShuffle<Byte> toShuffle() {
-        return super.toShuffleTemplate(Byte128Shuffle.class); // specialize
+    final <F> VectorShuffle<F> bitsToShuffle(AbstractSpecies<F> dsp) {
+        return bitsToShuffleTemplate(dsp);
+    }
+
+    @Override
+    @ForceInline
+    public final Byte128Shuffle toShuffle() {
+        return (Byte128Shuffle) toShuffle(vspecies(), false);
     }
 
     // Specialized unary testing
@@ -341,6 +366,12 @@ final class Byte128Vector extends ByteVector {
     @ForceInline
     public final Byte128Mask test(Test op) {
         return super.testTemplate(Byte128Mask.class, op);  // specialize
+    }
+
+    @Override
+    @ForceInline
+    public final Byte128Mask test(Test op, VectorMask<Byte> m) {
+        return super.testTemplate(Byte128Mask.class, op, (Byte128Mask) m);  // specialize
     }
 
     // Specialized comparisons
@@ -362,6 +393,13 @@ final class Byte128Vector extends ByteVector {
     public final Byte128Mask compare(Comparison op, long s) {
         return super.compareTemplate(Byte128Mask.class, op, s);  // specialize
     }
+
+    @Override
+    @ForceInline
+    public final Byte128Mask compare(Comparison op, Vector<Byte> v, VectorMask<Byte> m) {
+        return super.compareTemplate(Byte128Mask.class, op, v, (Byte128Mask) m);
+    }
+
 
     @Override
     @ForceInline
@@ -419,6 +457,7 @@ final class Byte128Vector extends ByteVector {
                                   VectorMask<Byte> m) {
         return (Byte128Vector)
             super.rearrangeTemplate(Byte128Shuffle.class,
+                                    Byte128Mask.class,
                                     (Byte128Shuffle) shuffle,
                                     (Byte128Mask) m);  // specialize
     }
@@ -435,6 +474,22 @@ final class Byte128Vector extends ByteVector {
 
     @Override
     @ForceInline
+    public Byte128Vector compress(VectorMask<Byte> m) {
+        return (Byte128Vector)
+            super.compressTemplate(Byte128Mask.class,
+                                   (Byte128Mask) m);  // specialize
+    }
+
+    @Override
+    @ForceInline
+    public Byte128Vector expand(VectorMask<Byte> m) {
+        return (Byte128Vector)
+            super.expandTemplate(Byte128Mask.class,
+                                   (Byte128Mask) m);  // specialize
+    }
+
+    @Override
+    @ForceInline
     public Byte128Vector selectFrom(Vector<Byte> v) {
         return (Byte128Vector)
             super.selectFromTemplate((Byte128Vector) v);  // specialize
@@ -446,9 +501,16 @@ final class Byte128Vector extends ByteVector {
                                    VectorMask<Byte> m) {
         return (Byte128Vector)
             super.selectFromTemplate((Byte128Vector) v,
-                                     (Byte128Mask) m);  // specialize
+                                     Byte128Mask.class, (Byte128Mask) m);  // specialize
     }
 
+    @Override
+    @ForceInline
+    public Byte128Vector selectFrom(Vector<Byte> v1,
+                                   Vector<Byte> v2) {
+        return (Byte128Vector)
+            super.selectFromTemplate((Byte128Vector) v1, (Byte128Vector) v2);  // specialize
+    }
 
     @ForceInline
     @Override
@@ -612,24 +674,21 @@ final class Byte128Vector extends ByteVector {
             AbstractSpecies<E> species = (AbstractSpecies<E>) dsp;
             if (length() != species.laneCount())
                 throw new IllegalArgumentException("VectorMask length and species length differ");
-            if (VSIZE == species.vectorBitSize()) {
-                Class<?> dtype = species.elementType();
-                Class<?> dmtype = species.maskType();
-                return VectorSupport.convert(VectorSupport.VECTOR_OP_REINTERPRET,
-                    this.getClass(), ETYPE, VLENGTH,
-                    dmtype, dtype, VLENGTH,
-                    this, species,
-                    Byte128Mask::defaultMaskCast);
-            }
-            return this.defaultMaskCast(species);
+
+            return VectorSupport.convert(VectorSupport.VECTOR_OP_CAST,
+                this.getClass(), ETYPE, VLENGTH,
+                species.maskType(), species.elementType(), VLENGTH,
+                this, species,
+                (m, s) -> s.maskFactory(m.toArray()).check(s));
         }
 
         @Override
         @ForceInline
-        public Byte128Mask eq(VectorMask<Byte> mask) {
-            Objects.requireNonNull(mask);
-            Byte128Mask m = (Byte128Mask)mask;
-            return xor(m.not());
+        /*package-private*/
+        Byte128Mask indexPartiallyInUpperRange(long offset, long limit) {
+            return (Byte128Mask) VectorSupport.indexPartiallyInUpperRange(
+                Byte128Mask.class, byte.class, VLENGTH, offset, limit,
+                (o, l) -> (Byte128Mask) TRUE_MASK.indexPartiallyInRange(o, l));
         }
 
         // Unary operations
@@ -640,6 +699,15 @@ final class Byte128Vector extends ByteVector {
             return xor(maskAll(true));
         }
 
+        @Override
+        @ForceInline
+        public Byte128Mask compress() {
+            return (Byte128Mask)VectorSupport.compressExpandOp(VectorSupport.VECTOR_OP_MASK_COMPRESS,
+                Byte128Vector.class, Byte128Mask.class, ETYPE, VLENGTH, null, this,
+                (v1, m1) -> VSPECIES.iota().compare(VectorOperators.LT, m1.trueCount()));
+        }
+
+
         // Binary operations
 
         @Override
@@ -647,9 +715,9 @@ final class Byte128Vector extends ByteVector {
         public Byte128Mask and(VectorMask<Byte> mask) {
             Objects.requireNonNull(mask);
             Byte128Mask m = (Byte128Mask)mask;
-            return VectorSupport.binaryOp(VECTOR_OP_AND, Byte128Mask.class, byte.class, VLENGTH,
-                                             this, m,
-                                             (m1, m2) -> m1.bOp(m2, (i, a, b) -> a & b));
+            return VectorSupport.binaryOp(VECTOR_OP_AND, Byte128Mask.class, null, byte.class, VLENGTH,
+                                          this, m, null,
+                                          (m1, m2, vm) -> m1.bOp(m2, (i, a, b) -> a & b));
         }
 
         @Override
@@ -657,19 +725,19 @@ final class Byte128Vector extends ByteVector {
         public Byte128Mask or(VectorMask<Byte> mask) {
             Objects.requireNonNull(mask);
             Byte128Mask m = (Byte128Mask)mask;
-            return VectorSupport.binaryOp(VECTOR_OP_OR, Byte128Mask.class, byte.class, VLENGTH,
-                                             this, m,
-                                             (m1, m2) -> m1.bOp(m2, (i, a, b) -> a | b));
+            return VectorSupport.binaryOp(VECTOR_OP_OR, Byte128Mask.class, null, byte.class, VLENGTH,
+                                          this, m, null,
+                                          (m1, m2, vm) -> m1.bOp(m2, (i, a, b) -> a | b));
         }
 
+        @Override
         @ForceInline
-        /* package-private */
-        Byte128Mask xor(VectorMask<Byte> mask) {
+        public Byte128Mask xor(VectorMask<Byte> mask) {
             Objects.requireNonNull(mask);
             Byte128Mask m = (Byte128Mask)mask;
-            return VectorSupport.binaryOp(VECTOR_OP_XOR, Byte128Mask.class, byte.class, VLENGTH,
-                                          this, m,
-                                          (m1, m2) -> m1.bOp(m2, (i, a, b) -> a ^ b));
+            return VectorSupport.binaryOp(VECTOR_OP_XOR, Byte128Mask.class, null, byte.class, VLENGTH,
+                                          this, m, null,
+                                          (m1, m2, vm) -> m1.bOp(m2, (i, a, b) -> a ^ b));
         }
 
         // Mask Query operations
@@ -677,22 +745,42 @@ final class Byte128Vector extends ByteVector {
         @Override
         @ForceInline
         public int trueCount() {
-            return VectorSupport.maskReductionCoerced(VECTOR_OP_MASK_TRUECOUNT, Byte128Mask.class, byte.class, VLENGTH, this,
-                                                      (m) -> trueCountHelper(((Byte128Mask)m).getBits()));
+            return (int) VectorSupport.maskReductionCoerced(VECTOR_OP_MASK_TRUECOUNT, Byte128Mask.class, byte.class, VLENGTH, this,
+                                                      (m) -> trueCountHelper(m.getBits()));
         }
 
         @Override
         @ForceInline
         public int firstTrue() {
-            return VectorSupport.maskReductionCoerced(VECTOR_OP_MASK_FIRSTTRUE, Byte128Mask.class, byte.class, VLENGTH, this,
-                                                      (m) -> firstTrueHelper(((Byte128Mask)m).getBits()));
+            return (int) VectorSupport.maskReductionCoerced(VECTOR_OP_MASK_FIRSTTRUE, Byte128Mask.class, byte.class, VLENGTH, this,
+                                                      (m) -> firstTrueHelper(m.getBits()));
         }
 
         @Override
         @ForceInline
         public int lastTrue() {
-            return VectorSupport.maskReductionCoerced(VECTOR_OP_MASK_LASTTRUE, Byte128Mask.class, byte.class, VLENGTH, this,
-                                                      (m) -> lastTrueHelper(((Byte128Mask)m).getBits()));
+            return (int) VectorSupport.maskReductionCoerced(VECTOR_OP_MASK_LASTTRUE, Byte128Mask.class, byte.class, VLENGTH, this,
+                                                      (m) -> lastTrueHelper(m.getBits()));
+        }
+
+        @Override
+        @ForceInline
+        public long toLong() {
+            if (length() > Long.SIZE) {
+                throw new UnsupportedOperationException("too many lanes for one long");
+            }
+            return VectorSupport.maskReductionCoerced(VECTOR_OP_MASK_TOLONG, Byte128Mask.class, byte.class, VLENGTH, this,
+                                                      (m) -> toLongHelper(m.getBits()));
+        }
+
+        // laneIsSet
+
+        @Override
+        @ForceInline
+        public boolean laneIsSet(int i) {
+            Objects.checkIndex(i, length());
+            return VectorSupport.extract(Byte128Mask.class, byte.class, VLENGTH,
+                                         this, i, (m, idx) -> (m.getBits()[idx] ? 1L : 0L)) == 1L;
         }
 
         // Reductions
@@ -716,9 +804,9 @@ final class Byte128Vector extends ByteVector {
         @ForceInline
         /*package-private*/
         static Byte128Mask maskAll(boolean bit) {
-            return VectorSupport.broadcastCoerced(Byte128Mask.class, byte.class, VLENGTH,
-                                                  (bit ? -1 : 0), null,
-                                                  (v, __) -> (v != 0 ? TRUE_MASK : FALSE_MASK));
+            return VectorSupport.fromBitsCoerced(Byte128Mask.class, byte.class, VLENGTH,
+                                                 (bit ? -1 : 0), MODE_BROADCAST, null,
+                                                 (v, __) -> (v != 0 ? TRUE_MASK : FALSE_MASK));
         }
         private static final Byte128Mask  TRUE_MASK = new Byte128Mask(true);
         private static final Byte128Mask FALSE_MASK = new Byte128Mask(false);
@@ -731,23 +819,26 @@ final class Byte128Vector extends ByteVector {
         static final int VLENGTH = VSPECIES.laneCount();    // used by the JVM
         static final Class<Byte> ETYPE = byte.class; // used by the JVM
 
-        Byte128Shuffle(byte[] reorder) {
-            super(VLENGTH, reorder);
+        Byte128Shuffle(byte[] indices) {
+            super(indices);
+            assert(VLENGTH == indices.length);
+            assert(indicesInRange(indices));
         }
 
-        public Byte128Shuffle(int[] reorder) {
-            super(VLENGTH, reorder);
+        Byte128Shuffle(int[] indices, int i) {
+            this(prepare(indices, i));
         }
 
-        public Byte128Shuffle(int[] reorder, int i) {
-            super(VLENGTH, reorder, i);
+        Byte128Shuffle(IntUnaryOperator fn) {
+            this(prepare(fn));
         }
 
-        public Byte128Shuffle(IntUnaryOperator fn) {
-            super(VLENGTH, fn);
+        byte[] indices() {
+            return (byte[])getPayload();
         }
 
         @Override
+        @ForceInline
         public ByteSpecies vspecies() {
             return VSPECIES;
         }
@@ -763,32 +854,103 @@ final class Byte128Vector extends ByteVector {
         @Override
         @ForceInline
         public Byte128Vector toVector() {
-            return VectorSupport.shuffleToVector(VCLASS, ETYPE, Byte128Shuffle.class, this, VLENGTH,
-                                                    (s) -> ((Byte128Vector)(((AbstractShuffle<Byte>)(s)).toVectorTemplate())));
+            return toBitsVector();
         }
 
         @Override
         @ForceInline
-        public <F> VectorShuffle<F> cast(VectorSpecies<F> s) {
-            AbstractSpecies<F> species = (AbstractSpecies<F>) s;
-            if (length() != species.laneCount())
-                throw new IllegalArgumentException("VectorShuffle length and species length differ");
-            int[] shuffleArray = toArray();
-            return s.shuffleFromArray(shuffleArray, 0).check(s);
+        Byte128Vector toBitsVector() {
+            return (Byte128Vector) super.toBitsVectorTemplate();
+        }
+
+        @Override
+        Byte128Vector toBitsVector0() {
+            return ((Byte128Vector) vspecies().asIntegral().dummyVector()).vectorFactory(indices());
+        }
+
+        @Override
+        @ForceInline
+        public int laneSource(int i) {
+            return (int)toBitsVector().lane(i);
+        }
+
+        @Override
+        @ForceInline
+        public void intoArray(int[] a, int offset) {
+            VectorSpecies<Integer> species = IntVector.SPECIES_128;
+            Vector<Byte> v = toBitsVector();
+            v.convertShape(VectorOperators.B2I, species, 0)
+                    .reinterpretAsInts()
+                    .intoArray(a, offset);
+            v.convertShape(VectorOperators.B2I, species, 1)
+                    .reinterpretAsInts()
+                    .intoArray(a, offset + species.length());
+            v.convertShape(VectorOperators.B2I, species, 2)
+                    .reinterpretAsInts()
+                    .intoArray(a, offset + species.length() * 2);
+            v.convertShape(VectorOperators.B2I, species, 3)
+                    .reinterpretAsInts()
+                    .intoArray(a, offset + species.length() * 3);
+        }
+
+        @Override
+        @ForceInline
+        public final Byte128Mask laneIsValid() {
+            return (Byte128Mask) toBitsVector().compare(VectorOperators.GE, 0)
+                    .cast(vspecies());
         }
 
         @ForceInline
         @Override
-        public Byte128Shuffle rearrange(VectorShuffle<Byte> shuffle) {
-            Byte128Shuffle s = (Byte128Shuffle) shuffle;
-            byte[] reorder1 = reorder();
-            byte[] reorder2 = s.reorder();
-            byte[] r = new byte[reorder1.length];
-            for (int i = 0; i < reorder1.length; i++) {
-                int ssi = reorder2[i];
-                r[i] = reorder1[ssi];  // throws on exceptional index
+        public final Byte128Shuffle rearrange(VectorShuffle<Byte> shuffle) {
+            Byte128Shuffle concreteShuffle = (Byte128Shuffle) shuffle;
+            return (Byte128Shuffle) toBitsVector().rearrange(concreteShuffle)
+                    .toShuffle(vspecies(), false);
+        }
+
+        @ForceInline
+        @Override
+        public final Byte128Shuffle wrapIndexes() {
+            Byte128Vector v = toBitsVector();
+            if ((length() & (length() - 1)) == 0) {
+                v = (Byte128Vector) v.lanewise(VectorOperators.AND, length() - 1);
+            } else {
+                v = (Byte128Vector) v.blend(v.lanewise(VectorOperators.ADD, length()),
+                            v.compare(VectorOperators.LT, 0));
             }
-            return new Byte128Shuffle(r);
+            return (Byte128Shuffle) v.toShuffle(vspecies(), false);
+        }
+
+        private static byte[] prepare(int[] indices, int offset) {
+            byte[] a = new byte[VLENGTH];
+            for (int i = 0; i < VLENGTH; i++) {
+                int si = indices[offset + i];
+                si = partiallyWrapIndex(si, VLENGTH);
+                a[i] = (byte)si;
+            }
+            return a;
+        }
+
+        private static byte[] prepare(IntUnaryOperator f) {
+            byte[] a = new byte[VLENGTH];
+            for (int i = 0; i < VLENGTH; i++) {
+                int si = f.applyAsInt(i);
+                si = partiallyWrapIndex(si, VLENGTH);
+                a[i] = (byte)si;
+            }
+            return a;
+        }
+
+        private static boolean indicesInRange(byte[] indices) {
+            int length = indices.length;
+            for (byte si : indices) {
+                if (si >= (byte)length || si < (byte)(-length)) {
+                    String msg = ("index "+si+"out of range ["+length+"] in "+
+                                  java.util.Arrays.toString(indices));
+                    throw new AssertionError(msg);
+                }
+            }
+            return true;
         }
     }
 
@@ -803,6 +965,20 @@ final class Byte128Vector extends ByteVector {
         return super.fromArray0Template(a, offset);  // specialize
     }
 
+    @ForceInline
+    @Override
+    final
+    ByteVector fromArray0(byte[] a, int offset, VectorMask<Byte> m, int offsetInRange) {
+        return super.fromArray0Template(Byte128Mask.class, a, offset, (Byte128Mask) m, offsetInRange);  // specialize
+    }
+
+    @ForceInline
+    @Override
+    final
+    ByteVector fromArray0(byte[] a, int offset, int[] indexMap, int mapOffset, VectorMask<Byte> m) {
+        return super.fromArray0Template(Byte128Mask.class, a, offset, indexMap, mapOffset, (Byte128Mask) m);
+    }
+
 
     @ForceInline
     @Override
@@ -814,15 +990,22 @@ final class Byte128Vector extends ByteVector {
     @ForceInline
     @Override
     final
-    ByteVector fromByteArray0(byte[] a, int offset) {
-        return super.fromByteArray0Template(a, offset);  // specialize
+    ByteVector fromBooleanArray0(boolean[] a, int offset, VectorMask<Byte> m, int offsetInRange) {
+        return super.fromBooleanArray0Template(Byte128Mask.class, a, offset, (Byte128Mask) m, offsetInRange);  // specialize
     }
 
     @ForceInline
     @Override
     final
-    ByteVector fromByteBuffer0(ByteBuffer bb, int offset) {
-        return super.fromByteBuffer0Template(bb, offset);  // specialize
+    ByteVector fromMemorySegment0(MemorySegment ms, long offset) {
+        return super.fromMemorySegment0Template(ms, offset);  // specialize
+    }
+
+    @ForceInline
+    @Override
+    final
+    ByteVector fromMemorySegment0(MemorySegment ms, long offset, VectorMask<Byte> m, int offsetInRange) {
+        return super.fromMemorySegment0Template(Byte128Mask.class, ms, offset, (Byte128Mask) m, offsetInRange);  // specialize
     }
 
     @ForceInline
@@ -835,12 +1018,29 @@ final class Byte128Vector extends ByteVector {
     @ForceInline
     @Override
     final
-    void intoByteArray0(byte[] a, int offset) {
-        super.intoByteArray0Template(a, offset);  // specialize
+    void intoArray0(byte[] a, int offset, VectorMask<Byte> m) {
+        super.intoArray0Template(Byte128Mask.class, a, offset, (Byte128Mask) m);
     }
+
+
+    @ForceInline
+    @Override
+    final
+    void intoBooleanArray0(boolean[] a, int offset, VectorMask<Byte> m) {
+        super.intoBooleanArray0Template(Byte128Mask.class, a, offset, (Byte128Mask) m);
+    }
+
+    @ForceInline
+    @Override
+    final
+    void intoMemorySegment0(MemorySegment ms, long offset, VectorMask<Byte> m) {
+        super.intoMemorySegment0Template(Byte128Mask.class, ms, offset, (Byte128Mask) m);
+    }
+
 
     // End of specialized low-level memory operations.
 
     // ================================================
 
 }
+

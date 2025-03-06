@@ -56,6 +56,7 @@
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF
  * THE POSSIBILITY OF SUCH DAMAGE.
  */
+
 package jdk.internal.org.objectweb.asm.signature;
 
 /**
@@ -114,7 +115,7 @@ public class SignatureReader {
                 // ReferenceTypeSignature, it means the class bound is empty (which is a valid case).
                 offset = classBoundStartOffset + 1;
                 currentChar = signature.charAt(offset);
-                if (currentChar == 'L' || currentChar == 'Q' || currentChar == '[' || currentChar == 'T') {
+                if (currentChar == 'L' || currentChar == '[' || currentChar == 'T') {
                     offset = parseType(signature, offset, signatureVistor.visitClassBound());
                 }
 

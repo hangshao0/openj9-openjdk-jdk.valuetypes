@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -23,19 +23,18 @@
 
 package jdk.test.lib.net;
 
+import jdk.test.lib.Platform;
+
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.PrintStream;
-import java.io.UncheckedIOException;
+import java.net.Inet4Address;
+import java.net.Inet6Address;
 import java.net.InetAddress;
-import java.net.InetSocketAddress;
-import java.net.Socket;
-import java.net.SocketException;
-import java.net.UnknownHostException;
-import java.security.AccessController;
-import java.security.PrivilegedActionException;
-import java.security.PrivilegedExceptionAction;
-import java.util.concurrent.Callable;
+import java.net.ProtocolFamily;
+import java.net.StandardProtocolFamily;
+import java.nio.channels.SocketChannel;
+
 import jtreg.SkippedException;
 
 /**
@@ -47,47 +46,28 @@ public class IPSupport {
     private static final boolean hasIPv6;
     private static final boolean preferIPv4Stack;
     private static final boolean preferIPv6Addresses;
+    private static final int IPV4_SNDBUF = 65507;
+    private static final int IPV6_SNDBUF = 65527;
+    private static final int IPV6_SNDBUF_AIX = 65487;
 
     static {
-        try {
-            InetAddress loopbackIPv4 = InetAddress.getByAddress(
-                    new byte[] {0x7F, 0x00, 0x00, 0x01});
-
-            InetAddress loopbackIPv6 = InetAddress.getByAddress(
-                    new byte[] {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-                                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01});
-
-            hasIPv4 = runPrivilegedAction(() -> hasAddress(loopbackIPv4));
-            hasIPv6 = runPrivilegedAction(() -> hasAddress(loopbackIPv6));
-        } catch (UnknownHostException e) {
-            throw new AssertionError(e);
-        }
-        preferIPv4Stack = runPrivilegedAction(() -> Boolean.parseBoolean(
-            System.getProperty("java.net.preferIPv4Stack")));
-        preferIPv6Addresses = runPrivilegedAction(() -> Boolean.parseBoolean(
-            System.getProperty("java.net.preferIPv6Addresses")));
+        hasIPv4 = isSupported(Inet4Address.class);
+        hasIPv6 = isSupported(Inet6Address.class);
+        preferIPv4Stack = Boolean.parseBoolean(System.getProperty("java.net.preferIPv4Stack"));
+        preferIPv6Addresses = Boolean.parseBoolean(System.getProperty("java.net.preferIPv6Addresses"));
         if (!preferIPv4Stack && !hasIPv4 && !hasIPv6) {
             throw new AssertionError("IPv4 and IPv6 both not available and java.net.preferIPv4Stack is not true");
         }
     }
 
-    private static boolean hasAddress(InetAddress address) {
-        try (Socket socket = new Socket()) {
-            socket.bind(new InetSocketAddress(address, 0));
+    @SuppressWarnings("try")
+    private static boolean isSupported(Class<? extends InetAddress> addressType) {
+        ProtocolFamily family = addressType == Inet4Address.class ?
+                StandardProtocolFamily.INET : StandardProtocolFamily.INET6;
+        try (var sc = SocketChannel.open(family)) {
             return true;
-        } catch (SocketException se) {
+        } catch (IOException | UnsupportedOperationException ex) {
             return false;
-        } catch (IOException e) {
-            throw new UncheckedIOException(e);
-        }
-    }
-
-    private static <T> T runPrivilegedAction(Callable<T> callable) {
-        try {
-            PrivilegedExceptionAction<T> pa = () -> callable.call();
-            return AccessController.doPrivileged(pa);
-        } catch (PrivilegedActionException pae) {
-            throw new UncheckedIOException((IOException) pae.getCause());
         }
     }
 
@@ -120,7 +100,6 @@ public class IPSupport {
     public static final boolean preferIPv6Addresses() {
         return preferIPv6Addresses;
     }
-
 
     /**
      * Whether or not the current networking configuration is valid or not.
@@ -164,4 +143,21 @@ public class IPSupport {
         out.println("preferIPv6Addresses: " + preferIPv6Addresses());
     }
 
+    /**
+     * Return current platform's maximum size for IPv4 UDP send buffer
+     */
+    public static final int getMaxUDPSendBufSizeIPv4() {
+        return IPV4_SNDBUF;
+    }
+
+    /**
+     * Return current platform's maximum size for IPv6 UDP send buffer
+     */
+    public static final int getMaxUDPSendBufSizeIPv6() {
+        if (Platform.isAix()) {
+            return IPV6_SNDBUF_AIX;
+        } else {
+            return IPV6_SNDBUF;
+        }
+    }
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,6 +25,8 @@
 package java.lang.invoke;
 
 import sun.invoke.util.Wrapper;
+
+import java.lang.reflect.Modifier;
 
 import static java.lang.invoke.MethodHandleInfo.*;
 import static sun.invoke.util.Wrapper.forPrimitiveType;
@@ -105,9 +107,6 @@ import static sun.invoke.util.Wrapper.isWrapperType;
      *                   implemented by invoking the implementation method
      * @throws LambdaConversionException If any of the meta-factory protocol
      *         invariants are violated
-     * @throws SecurityException If a security manager is present, and it
-     *         <a href="MethodHandles.Lookup.html#secmgr">denies access</a>
-     *         from {@code caller} to the package of {@code implementation}.
      */
     AbstractValidatingLambdaMetafactory(MethodHandles.Lookup caller,
                                         MethodType factoryType,
@@ -136,7 +135,7 @@ import static sun.invoke.util.Wrapper.isWrapperType;
         this.implementation = implementation;
         this.implMethodType = implementation.type();
         try {
-            this.implInfo = caller.revealDirect(implementation); // may throw SecurityException
+            this.implInfo = caller.revealDirect(implementation);
         } catch (IllegalArgumentException e) {
             throw new LambdaConversionException(implementation + " is not direct or cannot be cracked");
         }
@@ -157,7 +156,7 @@ import static sun.invoke.util.Wrapper.isWrapperType;
                 // Classes compiled prior to dynamic nestmate support invoke a private instance
                 // method with REF_invokeSpecial. Newer classes use REF_invokeVirtual or
                 // REF_invokeInterface, and we can use that instruction in the lambda class.
-                if (targetClass == implClass) {
+                if (targetClass == implClass && Modifier.isPrivate(implInfo.getModifiers())) {
                     this.implKind = implClass.isInterface() ? REF_invokeInterface : REF_invokeVirtual;
                 } else {
                     this.implKind = REF_invokeSpecial;
@@ -269,7 +268,7 @@ import static sun.invoke.util.Wrapper.isWrapperType;
             if (!implClass.isAssignableFrom(receiverClass)) {
                 throw new LambdaConversionException(
                         String.format("Invalid receiver type %s; not a subtype of implementation type %s",
-                                      receiverClass, implClass));
+                                      receiverClass.descriptorString(), implClass.descriptorString()));
             }
         } else {
             // no receiver
@@ -369,42 +368,10 @@ import static sun.invoke.util.Wrapper.isWrapperType;
                     return !strict;
                 }
             } else {
-                // primitive types: fromType and toType are types of the same primitive class
-                // identity types: fromType should be a superclass of toType.
-                return !strict || canConvert(fromType, toType);
+                // fromType should be a superclass of toType
+                return !strict || toType.isAssignableFrom(fromType);
             }
         }
-    }
-
-    /**
-     * Tests if {@code fromType} can be converted to {@code toType}
-     * via an identity conversion, via a widening reference conversion or
-     * via primitive class narrowing and widening conversions.
-     * <p>
-     * If {@code fromType} represents a class or interface, this method
-     * returns {@code true} if {@code toType} is the same as,
-     * or is a superclass or superinterface of, {@code fromType}.
-     * <p>
-     * If {@code fromType} and {@code toType} is of the same primitive class,
-     * this method returns {@code true}.
-     * <p>
-     * Otherwise, this method returns {@code false}.
-     *
-     * @param     fromType the {@code Class} object to be converted from
-     * @param     toType the {@code Class} object to be converted to
-     * @return    {@code true} if {@code fromType} can be converted to {@code toType}
-     */
-    private boolean canConvert(Class<?> fromType, Class<?> toType) {
-        if (toType.isAssignableFrom(fromType)) {
-            return true;
-        }
-
-        if (fromType.isPrimitiveClass() && toType.isPrimitiveClass()) {
-            // val projection can be converted to ref projection; or vice verse
-            return fromType.asPrimaryType() == toType.asPrimaryType();
-        }
-
-        return false;
     }
 
     /**

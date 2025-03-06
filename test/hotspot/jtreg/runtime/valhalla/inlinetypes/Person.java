@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -23,13 +23,18 @@
 
 package runtime.valhalla.inlinetypes;
 
-public final primitive class Person {
+import jdk.internal.vm.annotation.ImplicitlyConstructible;
+import jdk.internal.vm.annotation.LooselyConsistentValue;
+
+@ImplicitlyConstructible
+@LooselyConsistentValue
+public value class Person {
 
     final int    id;
     final String firstName;
     final String lastName;
 
-    private Person(int id, String firstName, String lastName) {
+    public Person(int id, String firstName, String lastName) {
         this.id = id;
         this.firstName = firstName;
         this.lastName = lastName;
@@ -41,9 +46,5 @@ public final primitive class Person {
 
     public String toString() {
         return getFirstName() + " " + getLastName() + " (id=" + getId() + ")";
-    }
-
-    static Person create(int id, String firstName, String lastName) {
-        return new Person(id, firstName, lastName);
     }
 }

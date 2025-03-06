@@ -29,11 +29,11 @@
  * @test
  * @bug 8244712
  * @summary Test API usage with reference projection types.
+ * @ignore
  * @library ./lib
  * @modules jdk.compiler/com.sun.tools.javac.api
  *          jdk.compiler/com.sun.tools.javac.code
  * @build ToolTester
- * @run main TestApisWithProjections
  */
 
 import java.io.*;

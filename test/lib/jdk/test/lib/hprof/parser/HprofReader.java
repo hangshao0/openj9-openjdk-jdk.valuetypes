@@ -1,12 +1,10 @@
 /*
- * Copyright (c) 1997, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2023, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.  Oracle designates this
- * particular file as subject to the "Classpath" exception as provided
- * by Oracle in the LICENSE file that accompanied this code.
+ * published by the Free Software Foundation.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -97,6 +95,12 @@ public class HprofReader extends Reader /* imports */ implements ArrayTypeCodes 
     static final int HPROF_CONTROL_SETTINGS = 0x0e;
     static final int HPROF_LOCKSTATS_WAIT_TIME = 0x10;
     static final int HPROF_LOCKSTATS_HOLD_TIME = 0x11;
+
+    static final int HPROF_FLAT_ARRAYS          = 0x12;
+    static final int HPROF_INLINED_FIELDS       = 0x13;
+
+    static final int HPROF_FLAT_ARRAY           = 0x01;
+    static final int HPROF_CLASS_WITH_INLINED_FIELDS = 0x01;
 
     static final int HPROF_GC_ROOT_UNKNOWN       = 0xff;
     static final int HPROF_GC_ROOT_JNI_GLOBAL    = 0x01;
@@ -244,7 +248,7 @@ public class HprofReader extends Reader /* imports */ implements ArrayTypeCodes 
                 }
 
                 case HPROF_HEAP_DUMP: {
-                    if (dumpsToSkip <= 0) {
+                    if (dumpsToSkip == 0) {
                         try {
                             readHeapDump(length, currPos);
                         } catch (EOFException exp) {
@@ -253,7 +257,6 @@ public class HprofReader extends Reader /* imports */ implements ArrayTypeCodes 
                         if (debugLevel > 0) {
                             System.out.println("    Finished processing instances in heap dump.");
                         }
-                        return snapshot;
                     } else {
                         dumpsToSkip--;
                         skipBytes(length);
@@ -263,9 +266,9 @@ public class HprofReader extends Reader /* imports */ implements ArrayTypeCodes 
 
                 case HPROF_HEAP_DUMP_END: {
                     if (version >= VERSION_JDK6) {
-                        if (dumpsToSkip <= 0) {
-                            skipBytes(length);  // should be no-op
-                            return snapshot;
+                        if (dumpsToSkip == 0) {
+                            // update dumpsToSkip to skip other dumps
+                            dumpsToSkip--;
                         } else {
                             // skip this dump (of the end record for a sequence of dump segments)
                             dumpsToSkip--;
@@ -280,7 +283,7 @@ public class HprofReader extends Reader /* imports */ implements ArrayTypeCodes 
 
                 case HPROF_HEAP_DUMP_SEGMENT: {
                     if (version >= VERSION_JDK6) {
-                        if (dumpsToSkip <= 0) {
+                        if (dumpsToSkip == 0) {
                             try {
                                 // read the dump segment
                                 readHeapDump(length, currPos);
@@ -354,6 +357,15 @@ public class HprofReader extends Reader /* imports */ implements ArrayTypeCodes 
                     skipBytes(length);
                     break;
                 }
+                case HPROF_FLAT_ARRAYS: {
+                    readFlatArrays(length);
+                    break;
+                }
+                case HPROF_INLINED_FIELDS: {
+                    readInlinedFields(length);
+                    break;
+                }
+
                 default: {
                     skipBytes(length);
                     warn("Ignoring unrecognized record type " + type);
@@ -438,8 +450,10 @@ public class HprofReader extends Reader /* imports */ implements ArrayTypeCodes 
                     int threadSeq = in.readInt();
                     int stackSeq = in.readInt();
                     bytesLeft -= identifierSize + 8;
-                    threadObjects.put(threadSeq,
-                                      new ThreadObject(id, stackSeq));
+                    StackTrace st = getStackTraceFromSerial(stackSeq);
+                    ThreadObject threadObj = new ThreadObject(id, st);
+                    threadObjects.put(threadSeq, threadObj);
+                    snapshot.addThreadObject(threadObj);
                     break;
                 }
                 case HPROF_GC_ROOT_JNI_GLOBAL: {
@@ -455,11 +469,11 @@ public class HprofReader extends Reader /* imports */ implements ArrayTypeCodes 
                     int depth = in.readInt();
                     bytesLeft -= identifierSize + 8;
                     ThreadObject to = getThreadObjectFromSequence(threadSeq);
-                    StackTrace st = getStackTraceFromSerial(to.stackSeq);
+                    StackTrace st = to.getStackTrace();
                     if (st != null) {
                         st = st.traceForDepth(depth+1);
                     }
-                    snapshot.addRoot(new Root(id, to.threadId,
+                    snapshot.addRoot(new Root(id, to.getId(),
                                               Root.NATIVE_LOCAL, "", st));
                     break;
                 }
@@ -469,11 +483,11 @@ public class HprofReader extends Reader /* imports */ implements ArrayTypeCodes 
                     int depth = in.readInt();
                     bytesLeft -= identifierSize + 8;
                     ThreadObject to = getThreadObjectFromSequence(threadSeq);
-                    StackTrace st = getStackTraceFromSerial(to.stackSeq);
+                    StackTrace st = to.getStackTrace();;
                     if (st != null) {
                         st = st.traceForDepth(depth+1);
                     }
-                    snapshot.addRoot(new Root(id, to.threadId,
+                    snapshot.addRoot(new Root(id, to.getId(),
                                               Root.JAVA_LOCAL, "", st));
                     break;
                 }
@@ -482,8 +496,8 @@ public class HprofReader extends Reader /* imports */ implements ArrayTypeCodes 
                     int threadSeq = in.readInt();
                     bytesLeft -= identifierSize + 4;
                     ThreadObject to = getThreadObjectFromSequence(threadSeq);
-                    StackTrace st = getStackTraceFromSerial(to.stackSeq);
-                    snapshot.addRoot(new Root(id, to.threadId,
+                    StackTrace st = to.getStackTrace();;
+                    snapshot.addRoot(new Root(id, to.getId(),
                                               Root.NATIVE_STACK, "", st));
                     break;
                 }
@@ -498,8 +512,8 @@ public class HprofReader extends Reader /* imports */ implements ArrayTypeCodes 
                     int threadSeq = in.readInt();
                     bytesLeft -= identifierSize + 4;
                     ThreadObject to = getThreadObjectFromSequence(threadSeq);
-                    StackTrace st = getStackTraceFromSerial(to.stackSeq);
-                    snapshot.addRoot(new Root(id, to.threadId,
+                    StackTrace st = to.getStackTrace();
+                    snapshot.addRoot(new Root(id, to.getId(),
                                      Root.THREAD_BLOCK, "", st));
                     break;
                 }
@@ -852,7 +866,7 @@ public class HprofReader extends Reader /* imports */ implements ArrayTypeCodes 
         if (primitiveSignature != 0x00) {
             long size = elSize * (long)num;
             bytesRead += size;
-            JavaValueArray va = new JavaValueArray(primitiveSignature, start);
+            JavaValueArray va = new JavaValueArray(id, primitiveSignature, start);
             skipBytes(size);
             snapshot.addHeapObject(id, va);
             snapshot.setSiteTrace(va, stackTrace);
@@ -902,6 +916,58 @@ public class HprofReader extends Reader /* imports */ implements ArrayTypeCodes 
         }
     }
 
+    private void readFlatArrays(long length) throws IOException {
+        while (length > 0) {
+            byte tag = in.readByte();
+            length--;
+            switch (tag) {
+                case HPROF_FLAT_ARRAY: {
+                    long objId = readID();
+                    length -= identifierSize;
+                    long elementClassId = readID();
+                    length -= identifierSize;
+                    snapshot.addFlatArray(objId, elementClassId);
+                    break;
+                }
+                default: {
+                    throw new IOException("Invalid tag " + tag);
+                }
+            }
+        }
+    }
+
+    private void readInlinedFields(long length) throws IOException {
+        while (length > 0) {
+            byte tag = in.readByte();
+            length--;
+            switch (tag) {
+                case HPROF_CLASS_WITH_INLINED_FIELDS: {
+                    long classID = readID();
+                    length -= identifierSize;
+                    int fieldNum = in.readUnsignedShort();
+                    length -= 2;
+                    Snapshot.ClassInlinedFields[] fields = new Snapshot.ClassInlinedFields[fieldNum];
+                    for (int i = 0; i < fieldNum; i++) {
+                        int fieldIndex = in.readUnsignedShort();
+                        length -= 2;
+                        int synthFieldCount = in.readUnsignedShort();
+                        length -= 2;
+                        String fieldName = getNameFromID(readID());
+                        length -= identifierSize;
+                        long fieldClassId = readID();
+                        length -= identifierSize;
+                        fields[i] = new Snapshot.ClassInlinedFields(fieldIndex, synthFieldCount, fieldName, fieldClassId);
+                    }
+                    snapshot.addClassInlinedFields(classID, fields);
+                    break;
+                }
+                default: {
+                    throw new IOException("Invalid tag " + tag);
+                }
+            }
+        }
+    }
+
     private void handleEOF(EOFException exp, Snapshot snapshot) {
         if (debugLevel > 0) {
             exp.printStackTrace();
@@ -913,20 +979,6 @@ public class HprofReader extends Reader /* imports */ implements ArrayTypeCodes 
 
     private void warn(String msg) {
         System.out.println("WARNING: " + msg);
-    }
-
-    //
-    // A trivial data-holder class for HPROF_GC_ROOT_THREAD_OBJ.
-    //
-    private class ThreadObject {
-
-        long threadId;
-        int stackSeq;
-
-        ThreadObject(long threadId, int stackSeq) {
-            this.threadId = threadId;
-            this.stackSeq = stackSeq;
-        }
     }
 
 }

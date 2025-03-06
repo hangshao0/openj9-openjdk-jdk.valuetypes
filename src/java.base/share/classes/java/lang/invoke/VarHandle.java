@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -23,6 +23,12 @@
  * questions.
  */
 
+/*
+ * ===========================================================================
+ * (c) Copyright IBM Corp. 2024, 2024 All Rights Reserved
+ * ===========================================================================
+ */
+
 package java.lang.invoke;
 
 import java.lang.constant.ClassDesc;
@@ -31,15 +37,11 @@ import java.lang.constant.ConstantDesc;
 import java.lang.constant.ConstantDescs;
 import java.lang.constant.DirectMethodHandleDesc;
 import java.lang.constant.DynamicConstantDesc;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
-import java.util.function.BiFunction;
-import java.util.function.Function;
 
-import jdk.internal.util.Preconditions;
+import jdk.internal.misc.Unsafe;
 import jdk.internal.vm.annotation.DontInline;
 import jdk.internal.vm.annotation.ForceInline;
 import jdk.internal.vm.annotation.IntrinsicCandidate;
@@ -476,7 +478,44 @@ import static java.lang.invoke.MethodHandleStatics.UNSAFE;
  * @see MethodType
  * @since 9
  */
-public abstract class VarHandle implements Constable {
+public abstract sealed class VarHandle implements Constable
+     permits IndirectVarHandle, LazyInitializingVarHandle, SegmentVarHandle,
+             VarHandleByteArrayAsChars.ByteArrayViewVarHandle,
+             VarHandleByteArrayAsDoubles.ByteArrayViewVarHandle,
+             VarHandleByteArrayAsFloats.ByteArrayViewVarHandle,
+             VarHandleByteArrayAsInts.ByteArrayViewVarHandle,
+             VarHandleByteArrayAsLongs.ByteArrayViewVarHandle,
+             VarHandleByteArrayAsShorts.ByteArrayViewVarHandle,
+             VarHandleBooleans.Array,
+             VarHandleBooleans.FieldInstanceReadOnly,
+             VarHandleBooleans.FieldStaticReadOnly,
+             VarHandleBytes.Array,
+             VarHandleBytes.FieldInstanceReadOnly,
+             VarHandleBytes.FieldStaticReadOnly,
+             VarHandleChars.Array,
+             VarHandleChars.FieldInstanceReadOnly,
+             VarHandleChars.FieldStaticReadOnly,
+             VarHandleDoubles.Array,
+             VarHandleDoubles.FieldInstanceReadOnly,
+             VarHandleDoubles.FieldStaticReadOnly,
+             VarHandleFloats.Array,
+             VarHandleFloats.FieldInstanceReadOnly,
+             VarHandleFloats.FieldStaticReadOnly,
+             VarHandleInts.Array,
+             VarHandleInts.FieldInstanceReadOnly,
+             VarHandleInts.FieldStaticReadOnly,
+             VarHandleLongs.Array,
+             VarHandleLongs.FieldInstanceReadOnly,
+             VarHandleLongs.FieldStaticReadOnly,
+             VarHandleReferences.Array,
+             VarHandleReferences.FieldInstanceReadOnly,
+             VarHandleReferences.FieldStaticReadOnly,
+             VarHandleShorts.Array,
+             VarHandleShorts.FieldInstanceReadOnly,
+             VarHandleShorts.FieldStaticReadOnly,
+             VarHandleFlatValues.Array,
+             VarHandleFlatValues.FieldInstanceReadOnly,
+             VarHandleFlatValues.FieldStaticReadOnly {
     final VarForm vform;
     final boolean exact;
 
@@ -489,19 +528,26 @@ public abstract class VarHandle implements Constable {
         this.exact = exact;
     }
 
-    RuntimeException unsupported() {
-        return new UnsupportedOperationException();
+    /**
+     * Returns the target VarHandle.   Subclasses may override this method to implement
+     * additional logic for example lazily initializing the declaring class of a static field var handle.
+     */
+    @ForceInline
+    VarHandle target() {
+        return asDirect();
     }
 
-    boolean isDirect() {
-        return true;
-    }
-
+    /**
+     * Returns the direct target VarHandle.   Indirect VarHandle subclasses should implement
+     * this method.
+     *
+     * @see #getMethodHandle(int)
+     * @see #checkAccessModeThenIsDirect(AccessDescriptor)
+     */
+    @ForceInline
     VarHandle asDirect() {
         return this;
     }
-
-    VarHandle target() { return null; }
 
     /**
      * Returns {@code true} if this VarHandle has <a href="#invoke-exact-behavior"><em>invoke-exact behavior</em></a>.
@@ -781,7 +827,7 @@ public abstract class VarHandle implements Constable {
      * {@code (CT1 ct1, ..., CTn ctn, T expectedValue, T newValue)}
      * , statically represented using varargs.
      * @return {@code true} if successful, otherwise {@code false} if the
-     * witness value was not the same as the {@code expectedValue}.
+     * <em>witness value</em> was not the same as the {@code expectedValue}.
      * @throws UnsupportedOperationException if the access mode is unsupported
      * for this VarHandle.
      * @throws WrongMethodTypeException if the access mode type does not
@@ -814,7 +860,7 @@ public abstract class VarHandle implements Constable {
      * @param args the signature-polymorphic parameter list of the form
      * {@code (CT1 ct1, ..., CTn ctn, T expectedValue, T newValue)}
      * , statically represented using varargs.
-     * @return the signature-polymorphic result that is the witness value, which
+     * @return the signature-polymorphic result that is the <em>witness value</em>, which
      * will be the same as the {@code expectedValue} if successful
      * , statically represented using {@code Object}.
      * @throws UnsupportedOperationException if the access mode is unsupported
@@ -849,7 +895,7 @@ public abstract class VarHandle implements Constable {
      * @param args the signature-polymorphic parameter list of the form
      * {@code (CT1 ct1, ..., CTn ctn, T expectedValue, T newValue)}
      * , statically represented using varargs.
-     * @return the signature-polymorphic result that is the witness value, which
+     * @return the signature-polymorphic result that is the <em>witness value</em>, which
      * will be the same as the {@code expectedValue} if successful
      * , statically represented using {@code Object}.
      * @throws UnsupportedOperationException if the access mode is unsupported
@@ -884,7 +930,7 @@ public abstract class VarHandle implements Constable {
      * @param args the signature-polymorphic parameter list of the form
      * {@code (CT1 ct1, ..., CTn ctn, T expectedValue, T newValue)}
      * , statically represented using varargs.
-     * @return the signature-polymorphic result that is the witness value, which
+     * @return the signature-polymorphic result that is the <em>witness value</em>, which
      * will be the same as the {@code expectedValue} if successful
      * , statically represented using {@code Object}.
      * @throws UnsupportedOperationException if the access mode is unsupported
@@ -911,7 +957,7 @@ public abstract class VarHandle implements Constable {
      * {@link #get}.
      *
      * <p>This operation may fail spuriously (typically, due to memory
-     * contention) even if the witness value does match the expected value.
+     * contention) even if the <em>witness value</em> does match the expected value.
      *
      * <p>The method signature is of the form {@code (CT1 ct1, ..., CTn ctn, T expectedValue, T newValue)boolean}.
      *
@@ -924,7 +970,7 @@ public abstract class VarHandle implements Constable {
      * {@code (CT1 ct1, ..., CTn ctn, T expectedValue, T newValue)}
      * , statically represented using varargs.
      * @return {@code true} if successful, otherwise {@code false} if the
-     * witness value was not the same as the {@code expectedValue} or if this
+     * <em>witness value</em> was not the same as the {@code expectedValue} or if this
      * operation spuriously failed.
      * @throws UnsupportedOperationException if the access mode is unsupported
      * for this VarHandle.
@@ -948,7 +994,7 @@ public abstract class VarHandle implements Constable {
      * {@link #getVolatile}.
      *
      * <p>This operation may fail spuriously (typically, due to memory
-     * contention) even if the witness value does match the expected value.
+     * contention) even if the <em>witness value</em> does match the expected value.
      *
      * <p>The method signature is of the form {@code (CT1 ct1, ..., CTn ctn, T expectedValue, T newValue)boolean}.
      *
@@ -961,7 +1007,7 @@ public abstract class VarHandle implements Constable {
      * {@code (CT1 ct1, ..., CTn ctn, T expectedValue, T newValue)}
      * , statically represented using varargs.
      * @return {@code true} if successful, otherwise {@code false} if the
-     * witness value was not the same as the {@code expectedValue} or if this
+     * <em>witness value</em> was not the same as the {@code expectedValue} or if this
      * operation spuriously failed.
      * @throws UnsupportedOperationException if the access mode is unsupported
      * for this VarHandle.
@@ -985,7 +1031,7 @@ public abstract class VarHandle implements Constable {
      * {@link #getAcquire}.
      *
      * <p>This operation may fail spuriously (typically, due to memory
-     * contention) even if the witness value does match the expected value.
+     * contention) even if the <em>witness value</em> does match the expected value.
      *
      * <p>The method signature is of the form {@code (CT1 ct1, ..., CTn ctn, T expectedValue, T newValue)boolean}.
      *
@@ -999,7 +1045,7 @@ public abstract class VarHandle implements Constable {
      * {@code (CT1 ct1, ..., CTn ctn, T expectedValue, T newValue)}
      * , statically represented using varargs.
      * @return {@code true} if successful, otherwise {@code false} if the
-     * witness value was not the same as the {@code expectedValue} or if this
+     * <em>witness value</em> was not the same as the {@code expectedValue} or if this
      * operation spuriously failed.
      * @throws UnsupportedOperationException if the access mode is unsupported
      * for this VarHandle.
@@ -1023,7 +1069,7 @@ public abstract class VarHandle implements Constable {
      * {@link #get}.
      *
      * <p>This operation may fail spuriously (typically, due to memory
-     * contention) even if the witness value does match the expected value.
+     * contention) even if the <em>witness value</em> does match the expected value.
      *
      * <p>The method signature is of the form {@code (CT1 ct1, ..., CTn ctn, T expectedValue, T newValue)boolean}.
      *
@@ -1037,7 +1083,7 @@ public abstract class VarHandle implements Constable {
      * {@code (CT1 ct1, ..., CTn ctn, T expectedValue, T newValue)}
      * , statically represented using varargs.
      * @return {@code true} if successful, otherwise {@code false} if the
-     * witness value was not the same as the {@code expectedValue} or if this
+     * <em>witness value</em> was not the same as the {@code expectedValue} or if this
      * operation spuriously failed.
      * @throws UnsupportedOperationException if the access mode is unsupported
      * for this VarHandle.
@@ -1653,12 +1699,6 @@ public abstract class VarHandle implements Constable {
                                   Class<?>... intermediate) {
             Class<?>[] ps;
             int i;
-            // the field type (value) is mapped to the return type of MethodType
-            // the receiver type is mapped to a parameter type of MethodType
-            // So use the value type if it's a primitive class
-            if (receiver != null && receiver.isPrimitiveClass()) {
-                receiver = receiver.asValueType();
-            }
             switch (this) {
                 case GET:
                     ps = allocateParameters(0, receiver, intermediate);
@@ -1972,6 +2012,11 @@ public abstract class VarHandle implements Constable {
                 default -> throw new IllegalArgumentException("No AccessMode value for method name " + methodName);
             };
         }
+
+        private static final @Stable AccessMode[] VALUES = values();
+        static AccessMode valueFromOrdinal(int mode) {
+            return VALUES[mode];
+        }
     }
 
     static final class AccessDescriptor {
@@ -2043,25 +2088,46 @@ public abstract class VarHandle implements Constable {
         return accessModeType(accessMode.at.ordinal());
     }
 
+    /**
+     * Validates that the given access descriptors method type matches up with
+     * the access mode of this VarHandle, then returns if this is direct.
+     * These operations were grouped together to slightly
+     * improve efficiency during startup/warmup.
+     *
+     * A direct VarHandle's VarForm has implementation MemberNames that can
+     * be linked directly. If a VarHandle is indirect, it must override
+     * {@link #isAccessModeSupported} and {@link #getMethodHandleUncached}
+     * which access MemberNames.
+     *
+     * @return true if this is a direct VarHandle, false if it's an indirect
+     *         VarHandle.
+     * @throws WrongMethodTypeException if there's an access type mismatch
+     * @see #asDirect()
+     */
     @ForceInline
-    final void checkExactAccessMode(VarHandle.AccessDescriptor ad) {
+    boolean checkAccessModeThenIsDirect(VarHandle.AccessDescriptor ad) {
         if (exact && accessModeType(ad.type) != ad.symbolicMethodTypeExact) {
             throwWrongMethodTypeException(ad);
         }
+        // return true unless overridden in an IndirectVarHandle
+        return true;
     }
 
     @DontInline
     private final void throwWrongMethodTypeException(VarHandle.AccessDescriptor ad) {
-        throw new WrongMethodTypeException("expected " + accessModeType(ad.type) + " but found "
-                + ad.symbolicMethodTypeExact);
+        throw new WrongMethodTypeException("handle's method type " + accessModeType(ad.type)
+                + " but found " + ad.symbolicMethodTypeExact);
     }
 
     @ForceInline
     final MethodType accessModeType(int accessTypeOrdinal) {
-        TypesAndInvokers tis = getTypesAndInvokers();
-        MethodType mt = tis.methodType_table[accessTypeOrdinal];
+        MethodType[] mtTable = methodTypeTable;
+        if (mtTable == null) {
+            mtTable = methodTypeTable = new MethodType[VarHandle.AccessType.COUNT];
+        }
+        MethodType mt = mtTable[accessTypeOrdinal];
         if (mt == null) {
-            mt = tis.methodType_table[accessTypeOrdinal] =
+            mt = mtTable[accessTypeOrdinal] =
                     accessModeTypeUncached(accessTypeOrdinal);
         }
         return mt;
@@ -2086,7 +2152,7 @@ public abstract class VarHandle implements Constable {
      * @return {@code true} if the given access mode is supported, otherwise
      * {@code false}.
      */
-    public final boolean isAccessModeSupported(AccessMode accessMode) {
+    public boolean isAccessModeSupported(AccessMode accessMode) {
         return vform.getMemberNameOrNull(accessMode.ordinal()) != null;
     }
 
@@ -2112,7 +2178,7 @@ public abstract class VarHandle implements Constable {
     public MethodHandle toMethodHandle(AccessMode accessMode) {
         if (isAccessModeSupported(accessMode)) {
             MethodHandle mh = getMethodHandle(accessMode.ordinal());
-            return mh.bindTo(this);
+            return mh.bindTo(asDirect());
         }
         else {
             // Ensure an UnsupportedOperationException is thrown
@@ -2136,36 +2202,51 @@ public abstract class VarHandle implements Constable {
     }
 
     @Stable
-    TypesAndInvokers typesAndInvokers;
+    MethodType[] methodTypeTable;
 
-    static class TypesAndInvokers {
-        final @Stable
-        MethodType[] methodType_table = new MethodType[VarHandle.AccessType.COUNT];
+    @Stable
+    MethodHandle[] methodHandleTable;
 
-        final @Stable
-        MethodHandle[] methodHandle_table = new MethodHandle[AccessMode.COUNT];
+    private static final long METHOD_HANDLE_TABLE_OFFSET;
+
+    static {
+        METHOD_HANDLE_TABLE_OFFSET = UNSAFE.objectFieldOffset(VarHandle.class, "methodHandleTable");
     }
 
     @ForceInline
-    private final TypesAndInvokers getTypesAndInvokers() {
-        TypesAndInvokers tis = typesAndInvokers;
-        if (tis == null) {
-            tis = typesAndInvokers = new TypesAndInvokers();
+    final MethodHandle getMethodHandle(int mode) {
+        MethodHandle[] mhTable = methodHandleTable;
+        if (mhTable == null) {
+            mhTable = new MethodHandle[AccessMode.COUNT];
+            Object other = UNSAFE.compareAndExchangeReference(this, METHOD_HANDLE_TABLE_OFFSET, null, mhTable);
+            if (other != null) {
+                // We lost the race. Use the winning table instead.
+                mhTable = (MethodHandle[])other;
+            }
         }
-        return tis;
-    }
-
-    @ForceInline
-    MethodHandle getMethodHandle(int mode) {
-        TypesAndInvokers tis = getTypesAndInvokers();
-        MethodHandle mh = tis.methodHandle_table[mode];
+        MethodHandle mh = mhTable[mode];
         if (mh == null) {
-            mh = tis.methodHandle_table[mode] = getMethodHandleUncached(mode);
+            mh = getMethodHandleUncached(mode);
+            long offset = Unsafe.ARRAY_OBJECT_BASE_OFFSET + (Unsafe.ARRAY_OBJECT_INDEX_SCALE * mode);
+            Object other = UNSAFE.compareAndExchangeReference(mhTable, offset, null, mh);
+            if (other != null) {
+                // We lost the race. Use the winning handle instead.
+                mh = (MethodHandle)other;
+            }
         }
         return mh;
     }
-    private final MethodHandle getMethodHandleUncached(int mode) {
-        MethodType mt = accessModeType(AccessMode.values()[mode]).
+
+    /**
+     * Computes a method handle that can be passed the {@linkplain #asDirect() direct}
+     * var handle of this var handle with the given access mode. Pre/postprocessing
+     * such as argument or return value filtering should be done by the returned
+     * method handle.
+     *
+     * @throws UnsupportedOperationException if the access mode is not supported
+     */
+    MethodHandle getMethodHandleUncached(int mode) {
+        MethodType mt = accessModeType(AccessMode.valueFromOrdinal(mode)).
                 insertParameterTypes(0, VarHandle.class);
         MemberName mn = vform.getMemberName(mode);
         DirectMethodHandle dmh = DirectMethodHandle.make(mn);
@@ -2316,9 +2397,9 @@ public abstract class VarHandle implements Constable {
          * Returns a {@linkplain VarHandleDesc} corresponding to a {@link VarHandle}
          * for an instance field.
          *
-         * @param name the unqualified name of the field
          * @param declaringClass a {@link ClassDesc} describing the declaring class,
          *                       for field var handles
+         * @param name the unqualified name of the field
          * @param fieldType a {@link ClassDesc} describing the type of the field
          * @return the {@linkplain VarHandleDesc}
          * @throws NullPointerException if any of the arguments are null
@@ -2335,9 +2416,9 @@ public abstract class VarHandle implements Constable {
          * Returns a {@linkplain VarHandleDesc} corresponding to a {@link VarHandle}
          * for a static field.
          *
-         * @param name the unqualified name of the field
          * @param declaringClass a {@link ClassDesc} describing the declaring class,
          *                       for field var handles
+         * @param name the unqualified name of the field
          * @param fieldType a {@link ClassDesc} describing the type of the field
          * @return the {@linkplain VarHandleDesc}
          * @throws NullPointerException if any of the arguments are null
@@ -2379,13 +2460,13 @@ public abstract class VarHandle implements Constable {
         public VarHandle resolveConstantDesc(MethodHandles.Lookup lookup)
                 throws ReflectiveOperationException {
             return switch (kind) {
-                case FIELD        -> lookup.findVarHandle((Class<?>) declaringClass.resolveConstantDesc(lookup),
+                case FIELD        -> lookup.findVarHandle(declaringClass.resolveConstantDesc(lookup),
                                                           constantName(),
-                                                          (Class<?>) varType.resolveConstantDesc(lookup));
-                case STATIC_FIELD -> lookup.findStaticVarHandle((Class<?>) declaringClass.resolveConstantDesc(lookup),
+                                                          varType.resolveConstantDesc(lookup));
+                case STATIC_FIELD -> lookup.findStaticVarHandle(declaringClass.resolveConstantDesc(lookup),
                                                           constantName(),
-                                                          (Class<?>) varType.resolveConstantDesc(lookup));
-                case ARRAY        -> MethodHandles.arrayElementVarHandle((Class<?>) declaringClass.resolveConstantDesc(lookup));
+                                                          varType.resolveConstantDesc(lookup));
+                case ARRAY        -> MethodHandles.arrayElementVarHandle(declaringClass.resolveConstantDesc(lookup));
                 default -> throw new InternalError("Cannot reach here");
             };
         }

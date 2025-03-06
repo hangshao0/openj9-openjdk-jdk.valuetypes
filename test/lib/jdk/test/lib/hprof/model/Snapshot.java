@@ -1,12 +1,10 @@
 /*
- * Copyright (c) 1997, 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
- * published by the Free Software Foundation.  Oracle designates this
- * particular file as subject to the "Classpath" exception as provided
- * by Oracle in the LICENSE file that accompanied this code.
+ * published by the Free Software Foundation.
  *
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
@@ -32,16 +30,12 @@
 
 package jdk.test.lib.hprof.model;
 
+import java.io.IOException;
 import java.lang.ref.SoftReference;
 import java.util.*;
 
 import jdk.test.lib.hprof.parser.ReadBuffer;
 import jdk.test.lib.hprof.util.Misc;
-
-/**
- *
- * @author      Bill Foote
- */
 
 /**
  * Represents a snapshot of the Java objects in the VM at one instant.
@@ -71,6 +65,10 @@ public class Snapshot implements AutoCloseable {
     private Map<String, JavaClass> classes =
                  new TreeMap<String, JavaClass>();
 
+    private Map<Number, Number> flatArrays = new HashMap<>();
+
+    private Map<Number, ClassInlinedFields[]> inlinedFields = new HashMap<>();
+
     // new objects relative to a baseline - lazily initialized
     private volatile Map<JavaHeapObject, Boolean> newObjects;
 
@@ -83,6 +81,9 @@ public class Snapshot implements AutoCloseable {
 
     // soft cache of finalizeable objects - lazily initialized
     private SoftReference<Vector<?>> finalizablesCache;
+
+    // threads
+    private ArrayList<ThreadObject> threads = new ArrayList<>();
 
     // represents null reference
     private JavaThing nullThing;
@@ -177,6 +178,10 @@ public class Snapshot implements AutoCloseable {
         putInClassesMap(c);
     }
 
+    public void addThreadObject(ThreadObject thread) {
+        threads.add(thread);
+    }
+
     JavaClass addFakeInstanceClass(long classID, int instSize) {
         // Create a fake class name based on ID.
         String name = "unknown-class<@" + Misc.toHex(classID) + ">";
@@ -204,6 +209,41 @@ public class Snapshot implements AutoCloseable {
         return c;
     }
 
+    public void addFlatArray(long objID, long elementClassID) {
+        flatArrays.put(makeId(objID), makeId(elementClassID));
+    }
+
+    /**
+     * @return null if the array is not flat array
+     */
+    Number findFlatArrayElementType(long arrayObjectID) {
+        return flatArrays.get(makeId(arrayObjectID));
+    }
+
+    public static class ClassInlinedFields {
+        final int fieldIndex;
+        final int synthFieldCount;
+        final String fieldName;
+        final long fieldClassID;
+
+        public ClassInlinedFields(int fieldIndex, int synthFieldCount, String fieldName, long fieldClassID) {
+            this.fieldIndex = fieldIndex;
+            this.synthFieldCount = synthFieldCount;
+            this.fieldName = fieldName;
+            this.fieldClassID =  fieldClassID;
+        }
+    }
+
+    public void addClassInlinedFields(long classID, ClassInlinedFields[] fields) {
+        inlinedFields.put(makeId(classID), fields);
+    }
+
+    /**
+     * @return null if the class has no inlined fields
+     */
+    ClassInlinedFields[] findClassInlinedFields(long classID) {
+        return inlinedFields.get(makeId(classID));
+    }
 
     /**
      * @return true iff it's possible that some JavaThing instances might
@@ -295,7 +335,7 @@ public class Snapshot implements AutoCloseable {
         }
         int count = 0;
         for (JavaHeapObject t : heapObjects.values()) {
-            t.setupReferers();
+            t.setupReferrers();
             ++count;
             if (calculateRefs && count % DOT_LIMIT == 0) {
                 System.out.print(".");
@@ -435,6 +475,10 @@ public class Snapshot implements AutoCloseable {
         return roots.elementAt(i);
     }
 
+    public List<ThreadObject> getThreads() {
+        return Collections.unmodifiableList(threads);
+    }
+
     public ReferenceChain[]
     rootsetReferencesTo(JavaHeapObject target, boolean includeWeak) {
         Vector<ReferenceChain> fifo = new Vector<ReferenceChain>();  // This is slow... A real fifo would help
@@ -452,11 +496,11 @@ public class Snapshot implements AutoCloseable {
             if (curr.getRoot() != null) {
                 result.addElement(chain);
                 // Even though curr is in the rootset, we want to explore its
-                // referers, because they might be more interesting.
+                // referrers, because they might be more interesting.
             }
-            Enumeration<JavaThing> referers = curr.getReferers();
-            while (referers.hasMoreElements()) {
-                JavaHeapObject t = (JavaHeapObject) referers.nextElement();
+            Enumeration<JavaThing> referrers = curr.getReferrers();
+            while (referrers.hasMoreElements()) {
+                JavaHeapObject t = (JavaHeapObject)referrers.nextElement();
                 if (t != null && !visited.containsKey(t)) {
                     if (includeWeak || !t.refersOnlyWeaklyTo(this, curr)) {
                         visited.put(t, t);
@@ -628,7 +672,7 @@ public class Snapshot implements AutoCloseable {
     }
 
     @Override
-    public void close() throws Exception {
+    public void close() throws IOException {
         readBuf.close();
     }
 

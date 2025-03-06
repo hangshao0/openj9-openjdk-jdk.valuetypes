@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,10 +25,14 @@
 
 /*
  * @test
- * @run testng/othervm -Diters=10    -Xint                   VarHandleTestAccessChar
- * @run testng/othervm -Diters=20000 -XX:TieredStopAtLevel=1 VarHandleTestAccessChar
- * @run testng/othervm -Diters=20000                         VarHandleTestAccessChar
- * @run testng/othervm -Diters=20000 -XX:-TieredCompilation  VarHandleTestAccessChar
+ * @run testng/othervm -Diters=10   -Xint                                                   VarHandleTestAccessChar
+ *
+ * @comment Set CompileThresholdScaling to 0.1 so that the warmup loop sets to 2000 iterations
+ *          to hit compilation thresholds
+ *
+ * @run testng/othervm -Diters=2000 -XX:CompileThresholdScaling=0.1 -XX:TieredStopAtLevel=1 VarHandleTestAccessChar
+ * @run testng/othervm -Diters=2000 -XX:CompileThresholdScaling=0.1                         VarHandleTestAccessChar
+ * @run testng/othervm -Diters=2000 -XX:CompileThresholdScaling=0.1 -XX:-TieredCompilation  VarHandleTestAccessChar
  */
 
 import org.testng.annotations.BeforeClass;
@@ -44,8 +48,6 @@ import java.util.List;
 import static org.testng.Assert.*;
 
 public class VarHandleTestAccessChar extends VarHandleBaseTest {
-    static final Class<?> type = char.class;
-
     static final char static_final_v = '\u0123';
 
     static char static_v;
@@ -72,7 +74,6 @@ public class VarHandleTestAccessChar extends VarHandleBaseTest {
 
     VarHandle vhArray;
 
-    VarHandle vhValueTypeField;
 
     VarHandle[] allocate(boolean same) {
         List<VarHandle> vhs = new ArrayList<>();
@@ -81,19 +82,19 @@ public class VarHandleTestAccessChar extends VarHandleBaseTest {
         VarHandle vh;
         try {
             vh = MethodHandles.lookup().findVarHandle(
-                    VarHandleTestAccessChar.class, "final_v" + postfix, type);
+                    VarHandleTestAccessChar.class, "final_v" + postfix, char.class);
             vhs.add(vh);
 
             vh = MethodHandles.lookup().findVarHandle(
-                    VarHandleTestAccessChar.class, "v" + postfix, type);
+                    VarHandleTestAccessChar.class, "v" + postfix, char.class);
             vhs.add(vh);
 
             vh = MethodHandles.lookup().findStaticVarHandle(
-                VarHandleTestAccessChar.class, "static_final_v" + postfix, type);
+                VarHandleTestAccessChar.class, "static_final_v" + postfix, char.class);
             vhs.add(vh);
 
             vh = MethodHandles.lookup().findStaticVarHandle(
-                VarHandleTestAccessChar.class, "static_v" + postfix, type);
+                VarHandleTestAccessChar.class, "static_v" + postfix, char.class);
             vhs.add(vh);
 
             if (same) {
@@ -112,21 +113,18 @@ public class VarHandleTestAccessChar extends VarHandleBaseTest {
     @BeforeClass
     public void setup() throws Exception {
         vhFinalField = MethodHandles.lookup().findVarHandle(
-                VarHandleTestAccessChar.class, "final_v", type);
+                VarHandleTestAccessChar.class, "final_v", char.class);
 
         vhField = MethodHandles.lookup().findVarHandle(
-                VarHandleTestAccessChar.class, "v", type);
+                VarHandleTestAccessChar.class, "v", char.class);
 
         vhStaticFinalField = MethodHandles.lookup().findStaticVarHandle(
-            VarHandleTestAccessChar.class, "static_final_v", type);
+            VarHandleTestAccessChar.class, "static_final_v", char.class);
 
         vhStaticField = MethodHandles.lookup().findStaticVarHandle(
-            VarHandleTestAccessChar.class, "static_v", type);
+            VarHandleTestAccessChar.class, "static_v", char.class);
 
         vhArray = MethodHandles.arrayElementVarHandle(char[].class);
-
-        vhValueTypeField = MethodHandles.lookup().findVarHandle(
-                    Value.class, "char_v", type);
     }
 
 
@@ -211,7 +209,7 @@ public class VarHandleTestAccessChar extends VarHandleBaseTest {
 
     @Test(dataProvider = "typesProvider")
     public void testTypes(VarHandle vh, List<Class<?>> pts) {
-        assertEquals(vh.varType(), type);
+        assertEquals(vh.varType(), char.class);
 
         assertEquals(vh.coordinateTypes(), pts);
 
@@ -223,12 +221,12 @@ public class VarHandleTestAccessChar extends VarHandleBaseTest {
     public void testLookupInstanceToStatic() {
         checkIAE("Lookup of static final field to instance final field", () -> {
             MethodHandles.lookup().findStaticVarHandle(
-                    VarHandleTestAccessChar.class, "final_v", type);
+                    VarHandleTestAccessChar.class, "final_v", char.class);
         });
 
         checkIAE("Lookup of static field to instance field", () -> {
             MethodHandles.lookup().findStaticVarHandle(
-                    VarHandleTestAccessChar.class, "v", type);
+                    VarHandleTestAccessChar.class, "v", char.class);
         });
     }
 
@@ -236,12 +234,12 @@ public class VarHandleTestAccessChar extends VarHandleBaseTest {
     public void testLookupStaticToInstance() {
         checkIAE("Lookup of instance final field to static final field", () -> {
             MethodHandles.lookup().findVarHandle(
-                VarHandleTestAccessChar.class, "static_final_v", type);
+                VarHandleTestAccessChar.class, "static_final_v", char.class);
         });
 
         checkIAE("Lookup of instance field to static field", () -> {
             vhStaticField = MethodHandles.lookup().findVarHandle(
-                VarHandleTestAccessChar.class, "static_v", type);
+                VarHandleTestAccessChar.class, "static_v", char.class);
         });
     }
 
@@ -282,11 +280,6 @@ public class VarHandleTestAccessChar extends VarHandleBaseTest {
         cases.add(new VarHandleAccessTestCase("Array index out of bounds",
                                               vhArray, VarHandleTestAccessChar::testArrayIndexOutOfBounds,
                                               false));
-        cases.add(new VarHandleAccessTestCase("Value type field",
-                                              vhValueTypeField, vh -> testValueTypeField(Value.getInstance(), vh)));
-        cases.add(new VarHandleAccessTestCase("Value type field unsupported",
-                                              vhValueTypeField, vh -> testValueTypeFieldUnsupported(Value.getInstance(), vh),
-                                              false));
         // Work around issue with jtreg summary reporting which truncates
         // the String result of Object.toString to 30 characters, hence
         // the first dummy argument
@@ -301,9 +294,6 @@ public class VarHandleTestAccessChar extends VarHandleBaseTest {
             atc.testAccess(t);
         }
     }
-
-
-
 
     static void testInstanceFinalField(VarHandleTestAccessChar recv, VarHandle vh) {
         // Plain
@@ -353,19 +343,6 @@ public class VarHandleTestAccessChar extends VarHandleBaseTest {
 
     }
 
-    static void testValueTypeField(Value recv, VarHandle vh) {
-        // Plain
-        {
-            char x = (char) vh.get(recv);
-            assertEquals(x, '\u0123', "get char value");
-        }
-    }
-
-    static void testValueTypeFieldUnsupported(Value recv, VarHandle vh) {
-        checkUOE(() -> {
-            vh.set(recv, '\u4567');
-        });
-    }
 
     static void testStaticFinalField(VarHandle vh) {
         // Plain
@@ -509,40 +486,72 @@ public class VarHandleTestAccessChar extends VarHandleBaseTest {
             boolean success = false;
             for (int c = 0; c < WEAK_ATTEMPTS && !success; c++) {
                 success = vh.weakCompareAndSetPlain(recv, '\u0123', '\u4567');
+                if (!success) weakDelay();
             }
-            assertEquals(success, true, "weakCompareAndSetPlain char");
+            assertEquals(success, true, "success weakCompareAndSetPlain char");
             char x = (char) vh.get(recv);
-            assertEquals(x, '\u4567', "weakCompareAndSetPlain char value");
+            assertEquals(x, '\u4567', "success weakCompareAndSetPlain char value");
+        }
+
+        {
+            boolean success = vh.weakCompareAndSetPlain(recv, '\u0123', '\u89AB');
+            assertEquals(success, false, "failing weakCompareAndSetPlain char");
+            char x = (char) vh.get(recv);
+            assertEquals(x, '\u4567', "failing weakCompareAndSetPlain char value");
         }
 
         {
             boolean success = false;
             for (int c = 0; c < WEAK_ATTEMPTS && !success; c++) {
                 success = vh.weakCompareAndSetAcquire(recv, '\u4567', '\u0123');
+                if (!success) weakDelay();
             }
-            assertEquals(success, true, "weakCompareAndSetAcquire char");
+            assertEquals(success, true, "success weakCompareAndSetAcquire char");
             char x = (char) vh.get(recv);
-            assertEquals(x, '\u0123', "weakCompareAndSetAcquire char");
+            assertEquals(x, '\u0123', "success weakCompareAndSetAcquire char");
+        }
+
+        {
+            boolean success = vh.weakCompareAndSetAcquire(recv, '\u4567', '\u89AB');
+            assertEquals(success, false, "failing weakCompareAndSetAcquire char");
+            char x = (char) vh.get(recv);
+            assertEquals(x, '\u0123', "failing weakCompareAndSetAcquire char value");
         }
 
         {
             boolean success = false;
             for (int c = 0; c < WEAK_ATTEMPTS && !success; c++) {
                 success = vh.weakCompareAndSetRelease(recv, '\u0123', '\u4567');
+                if (!success) weakDelay();
             }
-            assertEquals(success, true, "weakCompareAndSetRelease char");
+            assertEquals(success, true, "success weakCompareAndSetRelease char");
             char x = (char) vh.get(recv);
-            assertEquals(x, '\u4567', "weakCompareAndSetRelease char");
+            assertEquals(x, '\u4567', "success weakCompareAndSetRelease char");
+        }
+
+        {
+            boolean success = vh.weakCompareAndSetRelease(recv, '\u0123', '\u89AB');
+            assertEquals(success, false, "failing weakCompareAndSetRelease char");
+            char x = (char) vh.get(recv);
+            assertEquals(x, '\u4567', "failing weakCompareAndSetRelease char value");
         }
 
         {
             boolean success = false;
             for (int c = 0; c < WEAK_ATTEMPTS && !success; c++) {
                 success = vh.weakCompareAndSet(recv, '\u4567', '\u0123');
+                if (!success) weakDelay();
             }
-            assertEquals(success, true, "weakCompareAndSet char");
+            assertEquals(success, true, "success weakCompareAndSet char");
             char x = (char) vh.get(recv);
-            assertEquals(x, '\u0123', "weakCompareAndSet char value");
+            assertEquals(x, '\u0123', "success weakCompareAndSet char value");
+        }
+
+        {
+            boolean success = vh.weakCompareAndSet(recv, '\u4567', '\u89AB');
+            assertEquals(success, false, "failing weakCompareAndSet char");
+            char x = (char) vh.get(recv);
+            assertEquals(x, '\u0123', "failing weakCompareAndSet char value");
         }
 
         // Compare set and get
@@ -785,40 +794,72 @@ public class VarHandleTestAccessChar extends VarHandleBaseTest {
             boolean success = false;
             for (int c = 0; c < WEAK_ATTEMPTS && !success; c++) {
                 success = vh.weakCompareAndSetPlain('\u0123', '\u4567');
+                if (!success) weakDelay();
             }
-            assertEquals(success, true, "weakCompareAndSetPlain char");
+            assertEquals(success, true, "success weakCompareAndSetPlain char");
             char x = (char) vh.get();
-            assertEquals(x, '\u4567', "weakCompareAndSetPlain char value");
+            assertEquals(x, '\u4567', "success weakCompareAndSetPlain char value");
+        }
+
+        {
+            boolean success = vh.weakCompareAndSetPlain('\u0123', '\u89AB');
+            assertEquals(success, false, "failing weakCompareAndSetPlain char");
+            char x = (char) vh.get();
+            assertEquals(x, '\u4567', "failing weakCompareAndSetPlain char value");
         }
 
         {
             boolean success = false;
             for (int c = 0; c < WEAK_ATTEMPTS && !success; c++) {
                 success = vh.weakCompareAndSetAcquire('\u4567', '\u0123');
+                if (!success) weakDelay();
             }
-            assertEquals(success, true, "weakCompareAndSetAcquire char");
+            assertEquals(success, true, "success weakCompareAndSetAcquire char");
             char x = (char) vh.get();
-            assertEquals(x, '\u0123', "weakCompareAndSetAcquire char");
+            assertEquals(x, '\u0123', "success weakCompareAndSetAcquire char");
+        }
+
+        {
+            boolean success = vh.weakCompareAndSetAcquire('\u4567', '\u89AB');
+            assertEquals(success, false, "failing weakCompareAndSetAcquire char");
+            char x = (char) vh.get();
+            assertEquals(x, '\u0123', "failing weakCompareAndSetAcquire char value");
         }
 
         {
             boolean success = false;
             for (int c = 0; c < WEAK_ATTEMPTS && !success; c++) {
                 success = vh.weakCompareAndSetRelease('\u0123', '\u4567');
+                if (!success) weakDelay();
             }
-            assertEquals(success, true, "weakCompareAndSetRelease char");
+            assertEquals(success, true, "success weakCompareAndSetRelease char");
             char x = (char) vh.get();
-            assertEquals(x, '\u4567', "weakCompareAndSetRelease char");
+            assertEquals(x, '\u4567', "success weakCompareAndSetRelease char");
+        }
+
+        {
+            boolean success = vh.weakCompareAndSetRelease('\u0123', '\u89AB');
+            assertEquals(success, false, "failing weakCompareAndSetRelease char");
+            char x = (char) vh.get();
+            assertEquals(x, '\u4567', "failing weakCompareAndSetRelease char value");
         }
 
         {
             boolean success = false;
             for (int c = 0; c < WEAK_ATTEMPTS && !success; c++) {
                 success = vh.weakCompareAndSet('\u4567', '\u0123');
+                if (!success) weakDelay();
             }
-            assertEquals(success, true, "weakCompareAndSet char");
+            assertEquals(success, true, "success weakCompareAndSet char");
             char x = (char) vh.get();
-            assertEquals(x, '\u0123', "weakCompareAndSet char");
+            assertEquals(x, '\u0123', "success weakCompareAndSet char");
+        }
+
+        {
+            boolean success = vh.weakCompareAndSet('\u4567', '\u89AB');
+            assertEquals(success, false, "failing weakCompareAndSet char");
+            char x = (char) vh.get();
+            assertEquals(x, '\u0123', "failing weakCompareAndSet char value");
         }
 
         // Compare set and get
@@ -1064,40 +1105,72 @@ public class VarHandleTestAccessChar extends VarHandleBaseTest {
                 boolean success = false;
                 for (int c = 0; c < WEAK_ATTEMPTS && !success; c++) {
                     success = vh.weakCompareAndSetPlain(array, i, '\u0123', '\u4567');
+                    if (!success) weakDelay();
                 }
-                assertEquals(success, true, "weakCompareAndSetPlain char");
+                assertEquals(success, true, "success weakCompareAndSetPlain char");
                 char x = (char) vh.get(array, i);
-                assertEquals(x, '\u4567', "weakCompareAndSetPlain char value");
+                assertEquals(x, '\u4567', "success weakCompareAndSetPlain char value");
+            }
+
+            {
+                boolean success = vh.weakCompareAndSetPlain(array, i, '\u0123', '\u89AB');
+                assertEquals(success, false, "failing weakCompareAndSetPlain char");
+                char x = (char) vh.get(array, i);
+                assertEquals(x, '\u4567', "failing weakCompareAndSetPlain char value");
             }
 
             {
                 boolean success = false;
                 for (int c = 0; c < WEAK_ATTEMPTS && !success; c++) {
                     success = vh.weakCompareAndSetAcquire(array, i, '\u4567', '\u0123');
+                    if (!success) weakDelay();
                 }
-                assertEquals(success, true, "weakCompareAndSetAcquire char");
+                assertEquals(success, true, "success weakCompareAndSetAcquire char");
                 char x = (char) vh.get(array, i);
-                assertEquals(x, '\u0123', "weakCompareAndSetAcquire char");
+                assertEquals(x, '\u0123', "success weakCompareAndSetAcquire char");
+            }
+
+            {
+                boolean success = vh.weakCompareAndSetAcquire(array, i, '\u4567', '\u89AB');
+                assertEquals(success, false, "failing weakCompareAndSetAcquire char");
+                char x = (char) vh.get(array, i);
+                assertEquals(x, '\u0123', "failing weakCompareAndSetAcquire char value");
             }
 
             {
                 boolean success = false;
                 for (int c = 0; c < WEAK_ATTEMPTS && !success; c++) {
                     success = vh.weakCompareAndSetRelease(array, i, '\u0123', '\u4567');
+                    if (!success) weakDelay();
                 }
-                assertEquals(success, true, "weakCompareAndSetRelease char");
+                assertEquals(success, true, "success weakCompareAndSetRelease char");
                 char x = (char) vh.get(array, i);
-                assertEquals(x, '\u4567', "weakCompareAndSetRelease char");
+                assertEquals(x, '\u4567', "success weakCompareAndSetRelease char");
+            }
+
+            {
+                boolean success = vh.weakCompareAndSetRelease(array, i, '\u0123', '\u89AB');
+                assertEquals(success, false, "failing weakCompareAndSetRelease char");
+                char x = (char) vh.get(array, i);
+                assertEquals(x, '\u4567', "failing weakCompareAndSetRelease char value");
             }
 
             {
                 boolean success = false;
                 for (int c = 0; c < WEAK_ATTEMPTS && !success; c++) {
                     success = vh.weakCompareAndSet(array, i, '\u4567', '\u0123');
+                    if (!success) weakDelay();
                 }
-                assertEquals(success, true, "weakCompareAndSet char");
+                assertEquals(success, true, "success weakCompareAndSet char");
                 char x = (char) vh.get(array, i);
-                assertEquals(x, '\u0123', "weakCompareAndSet char");
+                assertEquals(x, '\u0123', "success weakCompareAndSet char");
+            }
+
+            {
+                boolean success = vh.weakCompareAndSet(array, i, '\u4567', '\u89AB');
+                assertEquals(success, false, "failing weakCompareAndSet char");
+                char x = (char) vh.get(array, i);
+                assertEquals(x, '\u0123', "failing weakCompareAndSet char value");
             }
 
             // Compare set and get

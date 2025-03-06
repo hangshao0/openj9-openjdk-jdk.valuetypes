@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -23,23 +23,31 @@
 package runtime.valhalla.inlinetypes;
 
 import java.lang.ref.*;
+import jdk.internal.vm.annotation.ImplicitlyConstructible;
+import jdk.internal.vm.annotation.LooselyConsistentValue;
 
 
 /*
  * @test Ifacmp
  * @requires vm.gc == null
  * @summary if_acmpeq/ne bytecode test
- * @compile Ifacmp.java
- * @run main/othervm -Xms16m -Xmx16m -XX:+UseSerialGC
- *                   runtime.valhalla.inlinetypes.Ifacmp
+ * @modules java.base/jdk.internal.value
+ *          java.base/jdk.internal.vm.annotation
+ * @enablePreview
+ * @compile --source 25 Ifacmp.java
+ * @run main/othervm -Xms16m -Xmx16m -XX:+UseSerialGC runtime.valhalla.inlinetypes.Ifacmp
  */
 public class Ifacmp {
 
-    static primitive class MyValue {
+    @ImplicitlyConstructible
+    @LooselyConsistentValue
+    static value class MyValue {
         int value;
         public MyValue(int v) { this.value = v; }
     };
-    static primitive class MyValue2 {
+    @ImplicitlyConstructible
+    @LooselyConsistentValue
+    static value class MyValue2 {
         int value;
         public MyValue2(int v) { this.value = v; }
     };
@@ -176,7 +184,7 @@ public class Ifacmp {
     }
 
     boolean shouldEqualSelf(Object a) {
-        return acmpModeInlineAlwaysFalse ? (!(a != null && a.getClass().isPrimitiveClass())) : true;
+        return acmpModeInlineAlwaysFalse ? (!(a != null && a.getClass().isValue())) : true;
     }
 
     void checkEqual(Object a, Object b, boolean isEqual) {

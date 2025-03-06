@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010, 2013, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2010, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -23,6 +23,12 @@
  * questions.
  */
 
+/*
+ * ===========================================================================
+ * (c) Copyright IBM Corp. 2022, 2022 All Rights Reserved
+ * ===========================================================================
+ */
+
 package java.lang;
 
 import java.util.WeakHashMap;
@@ -34,12 +40,17 @@ import jdk.internal.misc.Unsafe;
 import static java.lang.ClassValue.ClassValueMap.probeHomeLocation;
 import static java.lang.ClassValue.ClassValueMap.probeBackupLocations;
 
+/*[IF CRIU_SUPPORT]*/
+import openj9.internal.criu.NotCheckpointSafe;
+/*[ENDIF] CRIU_SUPPORT */
+
 /**
  * Lazily associate a computed value with (potentially) every type.
  * For example, if a dynamic language needs to construct a message dispatch
  * table for each class encountered at a message send call site,
  * it can use a {@code ClassValue} to cache information needed to
  * perform the message send quickly, for each class encountered.
+ * @param <T> the type of the derived value
  * @author John Rose, JSR 292 EG
  * @since 1.7
  */
@@ -180,9 +191,9 @@ public abstract class ClassValue<T> {
         map.changeEntry(this, value);
     }
 
-    /// --------
-    /// Implementation...
-    /// --------
+    //| --------
+    //| Implementation...
+    //| --------
 
     /** Return the cache, if it exists, else a dummy empty cache. */
     private static Entry<?>[] getCacheCarefully(Class<?> type) {
@@ -372,6 +383,9 @@ public abstract class ClassValue<T> {
 
     private static final Object CRITICAL_SECTION = new Object();
     private static final Unsafe UNSAFE = Unsafe.getUnsafe();
+    /*[IF CRIU_SUPPORT]*/
+    @NotCheckpointSafe
+    /*[ENDIF] CRIU_SUPPORT */
     private static ClassValueMap initializeMap(Class<?> type) {
         ClassValueMap map;
         synchronized (CRITICAL_SECTION) {  // private object to avoid deadlocks
@@ -534,9 +548,9 @@ public abstract class ClassValue<T> {
             addToCache(classValue, e);
         }
 
-        /// --------
-        /// Cache management.
-        /// --------
+        //| --------
+        //| Cache management.
+        //| --------
 
         // Statics do not need synchronization.
 
@@ -685,7 +699,7 @@ public abstract class ClassValue<T> {
             if (haveReplacement >= 0) {
                 if (cache[(replacementPos+1) & mask] != null) {
                     // Be conservative, to avoid breaking up a non-null run.
-                    cache[replacementPos & mask] = (Entry<?>) Entry.DEAD_ENTRY;
+                    cache[replacementPos & mask] = Entry.DEAD_ENTRY;
                 } else {
                     cache[replacementPos & mask] = null;
                     cacheLoad -= 1;
